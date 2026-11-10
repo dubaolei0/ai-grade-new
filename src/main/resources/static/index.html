@@ -247,7 +247,12 @@
     <section class="panel">
       <div class="panel-head">
         <h2>② 批改结果</h2>
-        <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">等待提交</span></div>
+        <div class="status">
+          <label class="raw-toggle" title="切换后按当前结果重新渲染，方便核对转录原文">
+            <input type="checkbox" id="rawLatex"> 原始 LaTeX
+          </label>
+          <span class="dot" id="statusDot"></span><span id="statusText">等待提交</span>
+        </div>
       </div>
       <div class="steps">
         <div class="step" id="step1">阶段一 · 作业转录</div>
@@ -491,8 +496,11 @@
           break;
         }
         flushPlain();
+        var body = raw.slice(i + len, end);
+        // cases / aligned 等环境里的对齐符 & 降级为间隔，避免显示成一堆 &amp;
+        if (body.indexOf('\\begin') >= 0) body = body.replace(/&/g, '\\quad ');
         out += '<span class="math' + (display ? ' math-block' : '') + '">' +
-               latexToHtml(raw.slice(i + len, end)) + '</span>';
+               latexToHtml(body) + '</span>';
         i = end + close.length;
         continue;
       }
@@ -512,7 +520,11 @@
   var pickedFile = null;
   var running = false;
   var controller = null;
-  var contentRaw = '';
+  var contentRaw = '';          // 阶段二批改结果原文
+  var transcriptRaw = '';       // 阶段一转录原文
+  var thinkingRaw = '';         // 思考过程原文
+  var showRawLatex = false;     // 是否显示原始 LaTeX
+  var rafId = 0;                // 流式渲染节流
 
   var dropZone = $('dropZone'), fileInput = $('fileInput'), preview = $('preview');
   var previewImg = $('previewImg'), fileName = $('fileName');
@@ -592,6 +604,9 @@
   function resetResult() {
     errorBar.style.display = 'none';
     contentRaw = '';
+    transcriptRaw = '';
+    thinkingRaw = '';
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
     streamText.textContent = '';
     streamText.style.display = 'block';
     streamText.innerHTML = '<span class="caret"></span>';
@@ -606,6 +621,8 @@
   clearBtn.addEventListener('click', function () {
     if (running) return;
     contentRaw = '';
+    transcriptRaw = '';
+    thinkingRaw = '';
     streamText.style.display = 'none';
     streamText.textContent = '';
     cards.style.display = 'none';
@@ -618,8 +635,8 @@
     setStatus('等待提交', '');
   });
 
-  /* 把模型输出的纯文本渲染成每题一张卡片 */
-  function renderGrading(text) {
+  /* 把模型输出的纯文本渲染成每题一张卡片（内部公式走 renderMathText） */
+  function renderGrading(text, rawMode) {
     var lines = text.split('\n'), html = '', current = null;
     function flush() {
       if (current) { html += '<div class="q-card">' + current.join('') + '</div>'; current = null; }
@@ -629,12 +646,12 @@
       if (!line) continue;
       if (line.charAt(0) === '第' && line.indexOf('题') >= 0 && line.length < 24) {
         flush();
-        current = ['<div class="q-title">' + esc(line) + '</div>'];
+        current = ['<div class="q-title">' + renderMathText(line, rawMode) + '</div>'];
         continue;
       }
       if (line.indexOf('【总分】') >= 0) {
         flush();
-        html += '<div class="total-banner">' + esc(line) + '</div>';
+        html += '<div class="total-banner">' + renderMathText(line, rawMode) + '</div>';
         continue;
       }
       var cls = 'q-line';
@@ -644,12 +661,34 @@
         else if (line.indexOf('⚠️') >= 0) cls += ' warn';
       }
       if (line.indexOf('得分') >= 0) cls += ' score';
-      var item = '<div class="' + cls + '">' + esc(line) + '</div>';
+      var item = '<div class="' + cls + '">' + renderMathText(line, rawMode) + '</div>';
       if (current) current.push(item); else html += item;
     }
     flush();
-    return html || '<div class="raw-stream">' + esc(text) + '</div>';
+    return html || '<div class="raw-stream">' + renderMathText(text, rawMode) + '</div>';
   }
+
+  /* ---------- 统一渲染：按原文重绘，流式下按帧合并，避免逐 token 全量重绘 ---------- */
+  function paintAll() {
+    transcriptText.innerHTML = transcriptRaw
+      ? renderMathText(transcriptRaw, showRawLatex) : '（暂无）';
+    thinkingText.innerHTML = thinkingRaw
+      ? renderMathText(thinkingRaw, showRawLatex) : '（暂无）';
+    streamText.innerHTML = renderMathText(contentRaw, showRawLatex) + '<span class="caret"></span>';
+    thinkingText.scrollTop = thinkingText.scrollHeight;
+    if (cards.style.display !== 'none' && contentRaw.trim()) {
+      cards.innerHTML = renderGrading(contentRaw.trim(), showRawLatex);
+    }
+  }
+  function scheduleRender() {
+    if (rafId) return;
+    rafId = requestAnimationFrame(function () { rafId = 0; paintAll(); });
+  }
+  /* 核对转录原文时可一键切回原始 LaTeX，按当前结果立即重渲染 */
+  $('rawLatex').addEventListener('change', function () {
+    showRawLatex = this.checked;
+    paintAll();
+  });
 
   /* ---------- SSE 事件处理 ---------- */
   function handleEvent(evt) {
@@ -657,22 +696,26 @@
       setStage(evt.stage);
       setStatus(evt.label || '处理中…', 'run');
     } else if (evt.type === 'transcript') {
-      transcriptText.textContent = evt.text || '（空）';
+      transcriptRaw = evt.text || '';
+      scheduleRender();
     } else if (evt.type === 'delta') {
       if (evt.kind === 'transcript') {
-        transcriptText.textContent = transcriptText.textContent.indexOf('（转录中') === 0
-          ? evt.text : transcriptText.textContent + evt.text;
+        transcriptRaw += evt.text || '';
+        scheduleRender();
       } else if (evt.kind === 'reasoning') {
-        if (thinkingText.textContent === '（暂无）') thinkingText.textContent = '';
-        thinkingText.textContent += evt.text;
-        thinkingText.scrollTop = thinkingText.scrollHeight;
+        thinkingRaw += evt.text || '';
+        scheduleRender();
       } else if (evt.kind === 'content') {
-        contentRaw += evt.text;
-        streamText.textContent = contentRaw;
+        contentRaw += evt.text || '';
+        scheduleRender();
       }
     } else if (evt.type === 'done') {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      /* 最终文本再渲染一次，保证流式末尾那些未闭合公式已转成正式排版 */
+      transcriptText.innerHTML = transcriptRaw ? renderMathText(transcriptRaw, showRawLatex) : '（空）';
+      thinkingText.innerHTML = thinkingRaw ? renderMathText(thinkingRaw, showRawLatex) : '（暂无）';
       streamText.style.display = 'none';
-      cards.innerHTML = renderGrading(contentRaw.trim());
+      cards.innerHTML = renderGrading(contentRaw.trim(), showRawLatex);
       cards.style.display = 'block';
       setStage('done');
       setStatus('批改完成', 'ok');

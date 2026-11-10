@@ -230,7 +230,30 @@ java src/main/java/com/yuanxuan/aigrade/cli/AiGradeCli.java 学生作答题.jpg
 
 > CLI 与 Spring Boot 后端是**两套独立实现**，共用同一套提示词和调用协议：Web 版用 Jackson + `SseEmitter` 推流给浏览器，CLI 版零依赖直接打印到终端。按需二选一即可。
 
-## 八、常见问题
+## 八、页面公式渲染（LaTeX → 可读排版）
+
+转录提示词要求「公式用 LaTeX」，模型会输出 `\(\boldsymbol{\dfrac{x^2}{25}+\dfrac{y^2}{16}=1}\)` 这类源码。若直接当纯文本显示就是一堆反斜杠，可读性很差。前端内置了一个**零依赖、无 CDN** 的轻量 LaTeX 渲染器（`index.html` 中 `MATH_RENDERER_START` ~ `MATH_RENDERER_END`），把公式转成真实的数学排版：
+
+| 原始 LaTeX | 页面显示 |
+| --- | --- |
+| `\boldsymbol{\dfrac{x^2}{25}+\dfrac{y^2}{16}=1}` | 粗体的 x²⁄25 + y²⁄16 = 1（分数线上下排布、上标） |
+| `\sqrt{4}` / `\sqrt[3]{x}` | 带根号横线的 √4 / ³√x |
+| `x_1^2` | x₁² |
+| `\alpha\le\beta`、`\times`、`\pi` | α ≤ β、×、π |
+| `\text{cm}`、`\binom{n}{k}`、`\boxed{2}` | 正体文本、组合数、带框答案 |
+
+覆盖范围：`\(...\)` `\[...\]` `$...$` `$$...$$` 四种定界符；`\frac`/`\dfrac`/`\tfrac`/`\cfrac`（支持嵌套与 `\frac12` 写法）；上下标、根号、希腊字母、常用运算符与函数、粗体/正体/黑板体、重音符号；`\left`/`\right` 等排版命令自动忽略。文本中未包裹定界符的裸命令（如 `化简 \sqrt{16}`）同样会被处理。
+
+几个实现要点：
+
+- **作用于三处输出**：「用于批改的转录文本」「思考过程」「批改结果（流式区 + 完成后的题目卡片）」，全部改为 `innerHTML = renderMathText(原文)`，原来的 `textContent` 拼接已移除。
+- **流式友好**：公式还没输出完整时，尾部按淡紫色等宽原文显示为「待完成」，闭合定界符到达后同一次重绘自动变成正式公式；渲染按 `requestAnimationFrame` 合并，不会逐 token 全量重绘。
+- **可核对原文**：结果面板右上角勾选「原始 LaTeX」，会按当前累积结果立即重渲染为纯源码，不重新请求后端、不影响已批改内容。批改场景需要逐字符核对手写转录，这个开关是刻意保留的。
+- **安全与降级**：所有文本都经过 HTML 转义；未识别的命令降级为「去掉反斜杠的命令名」而不是吞掉内容，保证转录原文不丢失。`cases` / `aligned` 等环境的对齐符降级为间隔。
+
+> 它是面向作业批改可读性的轻量渲染器，不是完整 TeX 引擎；复杂矩阵、自定义宏等会降级为文本。需要出版级排版可自行替换为本地 KaTeX。CLI 版输出到终端，仍保留原始 LaTeX，不受此影响。
+
+## 九、常见问题
 
 - **提示「尚未配置 API Key」**：环境变量要在启动服务的同一个终端里设置，设置后需重启服务。
 - **HTTP 401**：Key 无效或复制时带了空格。
@@ -238,8 +261,9 @@ java src/main/java/com/yuanxuan/aigrade/cli/AiGradeCli.java 学生作答题.jpg
 - **批改很慢**：阶段二开启了思考，题量多时可能耗时 1~3 分钟；SSE 超时已设为 10 分钟。
 - **中文乱码**：SSE 事件已用 UTF-8 字节写出；若自行改造请勿改回 String 写出。
 - **图片过大**：超过 20MB 会被拒绝，建议压缩后再上传。
+- **公式还是显示成源码**：确认浏览器已刷新到新页面（旧页面可能被缓存，强制刷新一次）；勾选「原始 LaTeX」会刻意显示源码，取消勾选即可。
 - **启动日志显示端口不是 8080**：若环境里存在 `SERVER_PORT` / `SERVER__PORT` 一类环境变量，Spring Boot 宽松绑定会覆盖 `server.port`。显式指定即可：`java -jar target/ai-grade-1.0.0.jar --server.port=8080`。若确实改用其他端口，直接双击 HTML 打开时请同步修改 `index.html` 顶部的 `API` 常量。
 
-## 九、技术栈
+## 十、技术栈
 
-Spring Boot 3.2.5 · Java 21 · JDK 内置 HttpClient（无第三方 HTTP 依赖）· Jackson · 原生 HTML/CSS/JS 单页（无前端框架、无 CDN，可离线打开）。
+Spring Boot 3.2.5 · Java 21 · JDK 内置 HttpClient（无第三方 HTTP 依赖）· Jackson · 原生 HTML/CSS/JS 单页（无前端框架、无 CDN，可离线打开）· 内置轻量 LaTeX 渲染器。
