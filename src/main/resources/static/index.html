@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 智能作业批改 · Qwen</title>
+<style>
+  :root {
+    --bg: #f4f6fb;
+    --card: #ffffff;
+    --primary: #4f46e5;
+    --primary-2: #7c3aed;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --ok: #16a34a;
+    --bad: #dc2626;
+    --warn: #d97706;
+    --soft: #f8fafc;
+    --shadow: 0 10px 30px rgba(30, 41, 90, .08);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .app { max-width: 1320px; margin: 0 auto; padding: 24px 24px 40px; }
+
+  header.top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+    background: linear-gradient(120deg, #4f46e5, #7c3aed 55%, #9333ea);
+    color: #fff; border-radius: 20px; padding: 24px 28px;
+    box-shadow: 0 12px 28px rgba(79, 70, 229, .22);
+  }
+  .top h1 { margin: 0; font-size: 22px; letter-spacing: .5px; }
+  .top p { margin: 6px 0 0; font-size: 13px; opacity: .88; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip {
+    background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.3);
+    padding: 5px 12px; border-radius: 999px; font-size: 12px; white-space: nowrap;
+  }
+  .chip.ok { background: rgba(22,163,74,.28); border-color: rgba(134,239,172,.6); }
+  .chip.warn { background: rgba(245,158,11,.35); border-color: rgba(253,230,138,.7); }
+  .chip.bad { background: rgba(220,38,38,.35); border-color: rgba(254,202,202,.7); }
+
+  .layout { display: grid; grid-template-columns: minmax(340px, 1fr) minmax(400px, 1.15fr); gap: 20px; margin-top: 20px; }
+  @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); overflow: hidden; }
+  .panel-head { padding: 18px 22px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .panel-head h2 { margin: 0; font-size: 16px; }
+  .panel-head .hint { font-size: 12px; color: var(--muted); }
+  .panel-body { padding: 20px 22px 24px; }
+
+  .tabs { display: flex; gap: 6px; background: var(--soft); border: 1px solid var(--border); padding: 5px; border-radius: 12px; margin-bottom: 20px; }
+  .tab {
+    flex: 1; text-align: center; padding: 9px 8px; border-radius: 9px; cursor: pointer;
+    font-size: 13px; color: var(--muted); border: 0; background: transparent; transition: .18s;
+  }
+  .tab.active { background: #fff; color: var(--primary); font-weight: 600; box-shadow: 0 2px 8px rgba(30,41,90,.1); }
+
+  .field-label { display: block; font-weight: 600; font-size: 13px; margin: 0 0 8px; }
+  .field-note { font-size: 12px; color: var(--muted); margin: -4px 0 10px; }
+
+  textarea {
+    width: 100%; min-height: 110px; resize: vertical; padding: 12px 14px;
+    border: 1px solid var(--border); border-radius: 12px; outline: none;
+    font-family: inherit; font-size: 13px; color: var(--text); background: #fff;
+  }
+  textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,70,229,.12); }
+
+  .drop {
+    border: 2px dashed #cbd5e1; border-radius: 14px; padding: 22px 16px; text-align: center;
+    cursor: pointer; background: var(--soft); transition: .18s;
+  }
+  .drop:hover, .drop.drag { border-color: var(--primary); background: #eef2ff; }
+  .drop .icon { font-size: 30px; line-height: 1; }
+  .drop .main { margin-top: 8px; font-weight: 600; color: var(--primary); }
+  .drop .sub { margin-top: 4px; font-size: 12px; color: var(--muted); }
+  .preview { display: none; margin-top: 12px; text-align: center; }
+  .preview img { max-width: 100%; max-height: 230px; border-radius: 12px; border: 1px solid var(--border); }
+  .preview .file-row { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; justify-content: center; gap: 12px; align-items: center; }
+  .link-btn { border: 0; background: none; color: var(--bad); cursor: pointer; font-size: 12px; padding: 0; }
+
+  .options { display: flex; align-items: center; justify-content: space-between; margin: 20px 0 16px; padding: 12px 14px; background: var(--soft); border-radius: 12px; border: 1px solid var(--border); }
+  .options span { font-size: 13px; }
+  .switch { position: relative; width: 42px; height: 24px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; inset: 0; background: #cbd5e1; border-radius: 999px; transition: .2s; cursor: pointer; }
+  .slider:before { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+  .switch input:checked + .slider { background: var(--primary); }
+  .switch input:checked + .slider:before { transform: translateX(18px); }
+
+  .submit {
+    width: 100%; padding: 13px; border: 0; border-radius: 12px; color: #fff; font-size: 15px;
+    font-weight: 600; cursor: pointer; background: linear-gradient(120deg, var(--primary), var(--primary-2));
+    box-shadow: 0 8px 18px rgba(79,70,229,.25); transition: .18s;
+  }
+  .submit:hover { filter: brightness(1.06); transform: translateY(-1px); }
+  .submit:disabled { opacity: .65; cursor: not-allowed; transform: none; }
+  .submit.stop { background: linear-gradient(120deg, #dc2626, #f97316); }
+
+  .principle { margin-top: 18px; padding: 12px 14px; border-radius: 12px; background: #f5f3ff; border: 1px solid #ede9fe; font-size: 12px; color: #5b21b6; }
+  .principle b { color: #4c1d95; }
+
+  .status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #cbd5e1; }
+  .dot.run { background: var(--primary); animation: pulse 1s infinite; }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+  .steps { display: flex; gap: 10px; padding: 16px 22px 0; }
+  .step { flex: 1; padding: 10px 12px; border-radius: 10px; background: var(--soft); border: 1px solid var(--border); font-size: 12px; color: var(--muted); text-align: center; transition: .2s; }
+  .step.active { background: #eef2ff; border-color: #c7d2fe; color: var(--primary); font-weight: 600; }
+  .step.done { background: #f0fdf4; border-color: #bbf7d0; color: var(--ok); }
+
+  .result-body { padding: 16px 22px 24px; }
+  details.block { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 12px; overflow: hidden; background: #fff; }
+  details.block summary { padding: 11px 14px; cursor: pointer; font-size: 13px; font-weight: 600; background: var(--soft); list-style: none; display: flex; justify-content: space-between; }
+  details.block summary::-webkit-details-marker { display: none; }
+  details.block summary:after { content: "▾"; color: var(--muted); }
+  details.block[open] summary:after { content: "▴"; }
+  .block-content { padding: 12px 14px; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; color: #374151; }
+  .thinking { color: var(--muted); font-style: italic; }
+
+  #resultMain { min-height: 200px; }
+  .placeholder { text-align: center; color: #9ca3af; padding: 56px 12px; font-size: 13px; }
+  .placeholder .big { font-size: 34px; display: block; margin-bottom: 10px; }
+  .raw-stream { white-space: pre-wrap; word-break: break-word; font-size: 13.5px; line-height: 1.9; }
+  .caret { display: inline-block; width: 7px; height: 15px; background: var(--primary); vertical-align: -2px; animation: blink .8s infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .q-card { border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; background: #fff; }
+  .q-title { font-weight: 700; color: var(--primary); margin-bottom: 6px; }
+  .q-line { font-size: 13px; padding: 2px 0; }
+  .q-line.ok { color: var(--ok); font-weight: 600; }
+  .q-line.bad { color: var(--bad); font-weight: 600; }
+  .q-line.warn { color: var(--warn); font-weight: 600; }
+  .q-line.score { color: #4338ca; font-weight: 600; }
+  .total-banner { margin-top: 14px; padding: 14px 16px; border-radius: 12px; background: linear-gradient(120deg, #4f46e5, #7c3aed); color: #fff; font-size: 16px; font-weight: 700; text-align: center; }
+  .error-bar { display: none; margin: 0 22px 18px; padding: 12px 14px; border-radius: 10px; background: #fef2f2; border: 1px solid #fecaca; color: var(--bad); font-size: 13px; }
+  footer { text-align: center; color: #9ca3af; font-size: 12px; margin-top: 22px; }
+
+  /* ---------- 数学公式渲染（轻量、零依赖） ---------- */
+  .math { font-family: "Cambria Math", "Times New Roman", "STIX Two Math", serif; font-size: 1.06em; }
+  .math-block { display: block; text-align: center; margin: 8px 0; font-size: 1.14em; }
+  .math .mi { font-style: italic; }
+  .math sup, .math sub { font-size: .7em; line-height: 0; position: relative; }
+  .math sup { top: -.45em; }
+  .math sub { bottom: -.25em; }
+  .frac, .binom { display: inline-flex; vertical-align: middle; text-align: center; margin: 0 .14em; }
+  .frac { flex-direction: column; }
+  .frac > .num { border-bottom: 1px solid currentColor; padding: 0 .3em .08em; }
+  .frac > .den { padding: .08em .3em 0; }
+  .binom { align-items: center; }
+  .binom > .bpar { font-size: 1.85em; line-height: 1; font-weight: 300; }
+  .binom > .bstack { display: inline-flex; flex-direction: column; }
+  .sqrt { display: inline-flex; align-items: stretch; vertical-align: middle; margin: 0 .1em; }
+  .sqrt > .rootidx { font-size: .6em; align-self: flex-start; margin: -.1em -.25em 0 0; }
+  .sqrt > .rad { font-size: 1.3em; line-height: 1; }
+  .sqrt > .radicand { border-top: 1px solid currentColor; padding: .06em .15em 0; }
+  .m-bold { font-weight: 700; }
+  .m-it { font-style: italic; }
+  .m-bb { font-weight: 700; font-family: "Times New Roman", serif; }
+  .m-cal { font-family: "Segoe Script", "Brush Script MT", cursive; }
+  .m-overline { border-top: 1px solid currentColor; padding-top: 1px; }
+  .m-underline { border-bottom: 1px solid currentColor; }
+  .m-text { font-family: inherit; font-style: normal; }
+  .m-boxed { border: 1px solid currentColor; border-radius: 4px; padding: 0 .25em; }
+  .math-pending {
+    font-family: "SFMono-Regular", Consolas, "Courier New", monospace;
+    font-size: .9em; color: #6d28d9; background: #f5f3ff; border-radius: 4px; padding: 0 3px;
+  }
+  .raw-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); cursor: pointer; margin-right: 8px; user-select: none; }
+  .raw-toggle input { margin: 0; cursor: pointer; }
+  .q-line { overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="top">
+    <div>
+      <h1>AI 智能作业批改</h1>
+      <p>上传作业图片或「题干 + 作答图片」，两阶段转录与批改，避免模型脑补手写答案</p>
+    </div>
+    <div class="chips">
+      <span class="chip" id="modelChip">模型加载中…</span>
+      <span class="chip" id="keyChip">检查配置中…</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- 左：输入 -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>① 提交作业</h2>
+        <span class="hint">支持 JPG / PNG / WEBP / GIF / BMP</span>
+      </div>
+      <div class="panel-body">
+        <div class="tabs">
+          <button class="tab active" data-mode="image">整张作业图片</button>
+          <button class="tab" data-mode="question">题干文本 + 作答图片</button>
+        </div>
+
+        <div id="questionBox" style="display:none">
+          <label class="field-label" for="questionText">题干文本</label>
+          <p class="field-note">填入题目内容（公式可用 LaTeX）；多题请用「第1题 / 第2题」自行分段。</p>
+          <textarea id="questionText" placeholder="例如：计算 $\sqrt{16} + 2^3$ 的值，并写出过程。"></textarea>
+          <div style="height:16px"></div>
+        </div>
+
+        <label class="field-label" id="uploadLabel">上传作业图片</label>
+        <p class="field-note" id="uploadNote">包含题干与学生手写作答的整张作业照片。</p>
+        <div class="drop" id="dropZone">
+          <div class="icon">🖼️</div>
+          <div class="main">点击选择图片，或拖拽到此处</div>
+          <div class="sub">建议拍摄清晰、光线均匀，单张不超过 20MB</div>
+        </div>
+        <input type="file" id="fileInput" accept="image/*" style="display:none">
+        <div class="preview" id="preview">
+          <img id="previewImg" alt="图片预览">
+          <div class="file-row"><span id="fileName"></span><button class="link-btn" id="removeFile">移除</button></div>
+        </div>
+
+        <div class="options">
+          <span>显示模型思考过程（阶段二）</span>
+          <label class="switch"><input type="checkbox" id="showThinking" checked><span class="slider"></span></label>
+        </div>
+
+        <button class="submit" id="submitBtn">开始批改</button>
+        <button class="link-btn" id="clearBtn" style="margin-top:12px;display:block;width:100%">清空结果</button>
+
+        <div class="principle">
+          <b>两阶段原理：</b>阶段一关闭思考，只照原样转录题干与手写答案，防止模型先算出标准答案再「脑补」学生笔迹；阶段二开启思考，仅依据转录文本独立解题并评分。
+        </div>
+      </div>
+    </section>
+
+    <!-- 右：结果 -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>② 批改结果</h2>
+        <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">等待提交</span></div>
+      </div>
+      <div class="steps">
+        <div class="step" id="step1">阶段一 · 作业转录</div>
+        <div class="step" id="step2">阶段二 · 解题与批改</div>
+      </div>
+
+      <div class="error-bar" id="errorBar"></div>
+
+      <div class="result-body">
+        <div id="resultMain">
+          <div class="placeholder" id="placeholder"><span class="big">📝</span>上传图片并点击「开始批改」，结果将在这里实时呈现</div>
+          <div class="raw-stream" id="streamText" style="display:none"></div>
+          <div id="cards" style="display:none"></div>
+        </div>
+
+        <details class="block" id="thinkingBlock" open>
+          <summary>思考过程</summary>
+          <div class="block-content thinking" id="thinkingText">（暂无）</div>
+        </details>
+        <details class="block" open>
+          <summary>用于批改的转录文本</summary>
+          <div class="block-content" id="transcriptText">（暂无）</div>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer>Spring Boot 3 · 阿里云百炼 OpenAI 兼容模式 · 前端为独立单页，可直接打开</footer>
+</div>
+
+<script>
+  /* MATH_RENDERER_START
+   * 轻量 LaTeX 渲染器：零依赖、流式友好。把 \(...\) \[...\] $...$ $$...$$ 内的公式
+   * 转成结构化 HTML（分式上下排布、上下标、根号、希腊字母、常用运算符）。
+   * 流式输出时公式可能尚未闭合，尾部按「原文待完成」显示，闭合后自动变成公式。
+   * 定位：面向作业批改结果的可读性，不是完整 TeX 引擎；未识别命令降级为命令名，
+   *      绝不吞掉内容，保证转录原文不丢失。
+   */
+  var MATH_SYMBOLS = {
+    alpha:'α', beta:'β', gamma:'γ', delta:'δ', epsilon:'ε', varepsilon:'ε', zeta:'ζ', eta:'η',
+    theta:'θ', vartheta:'ϑ', iota:'ι', kappa:'κ', lambda:'λ', mu:'μ', nu:'ν', xi:'ξ',
+    pi:'π', rho:'ρ', sigma:'σ', tau:'τ', upsilon:'υ', phi:'φ', varphi:'ϕ', chi:'χ', psi:'ψ', omega:'ω',
+    Gamma:'Γ', Delta:'Δ', Theta:'Θ', Lambda:'Λ', Xi:'Ξ', Pi:'Π', Sigma:'Σ', Upsilon:'Υ',
+    Phi:'Φ', Psi:'Ψ', Omega:'Ω',
+    times:'×', div:'÷', pm:'±', mp:'∓', cdot:'⋅', ast:'∗', star:'⋆', circ:'∘', bullet:'•',
+    le:'≤', leq:'≤', ge:'≥', geq:'≥', ne:'≠', neq:'≠', approx:'≈', equiv:'≡', sim:'∼',
+    simeq:'≃', cong:'≅', propto:'∝', in:'∈', notin:'∉', ni:'∋', subset:'⊂', subseteq:'⊆',
+    supset:'⊃', supseteq:'⊇', cup:'∪', cap:'∩', emptyset:'∅', varnothing:'∅',
+    forall:'∀', exists:'∃', infty:'∞', partial:'∂', nabla:'∇', angle:'∠', triangle:'△',
+    perp:'⊥', parallel:'∥', mid:'∣', to:'→', rightarrow:'→', leftarrow:'←',
+    leftrightarrow:'↔', Rightarrow:'⇒', Leftarrow:'⇐', Leftrightarrow:'⇔', mapsto:'↦',
+    therefore:'∴', because:'∵', degree:'°', ldots:'…', cdots:'⋯', vdots:'⋮', ddots:'⋱',
+    sum:'∑', prod:'∏', int:'∫', iint:'∬', oint:'∮', bigcup:'⋃', bigcap:'⋂',
+    log:'log', ln:'ln', lg:'lg', exp:'exp', lim:'lim',
+    sin:'sin', cos:'cos', tan:'tan', cot:'cot', sec:'sec', csc:'csc',
+    arcsin:'arcsin', arccos:'arccos', arctan:'arctan', sinh:'sinh', cosh:'cosh', tanh:'tanh',
+    max:'max', min:'min', gcd:'gcd', arg:'arg', det:'det', mod:'mod',
+    quad:'\u2003', qquad:'\u2003\u2003', ',':'\u2009', ':':'\u2009', ';':'\u2006', '!':'',
+    ' ':'\u00a0', '%':'%', '&':'&', '#':'#', '_':'_', '{':'{', '}':'}', '$':'$'
+  };
+  var MATH_STYLES = {
+    boldsymbol:'bold', bm:'bold', mathbf:'bold', mathit:'it', mathbb:'bb',
+    mathcal:'cal', mathscr:'cal', mathsf:'sf', mathtt:'tt',
+    overline:'overline', underline:'underline'
+  };
+  var MATH_ACCENTS = {
+    hat:'\u0302', widehat:'\u0302', tilde:'\u0303', widetilde:'\u0303',
+    vec:'\u20D7', bar:'\u0304', dot:'\u0307', ddot:'\u0308'
+  };
+  var MATH_IGNORED = {
+    left:1, right:1, big:1, Big:1, bigg:1, Bigg:1, bigl:1, bigr:1, Bigl:1, Bigr:1,
+    displaystyle:1, textstyle:1, scriptstyle:1, scriptscriptstyle:1,
+    limits:1, nolimits:1, noalign:1
+  };
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  /* 把一段 LaTeX 公式体解析为 HTML（递归下降，支持嵌套） */
+  function latexToHtml(src) {
+    src = String(src == null ? '' : src);
+    var i = 0;
+
+    function skipSpaces() {
+      while (i < src.length && (src.charAt(i) === ' ' || src.charAt(i) === '\t')) i++;
+    }
+
+    /* 读一个「原样文本」参数，用于 \text{...} 等 */
+    function readRawGroup() {
+      skipSpaces();
+      if (src.charAt(i) === '{') {
+        var start = ++i, depth = 1;
+        while (i < src.length && depth > 0) {
+          var ch = src.charAt(i);
+          if (ch === '{') depth++;
+          else if (ch === '}') depth--;
+          i++;
+        }
+        return src.slice(start, depth === 0 ? i - 1 : i);
+      }
+      if (i < src.length) return src.charAt(i++);
+      return '';
+    }
+
+    /* 读一个参数：{...} 或单个 atom，内容按公式解析 */
+    function readGroup() {
+      skipSpaces();
+      if (i >= src.length) return '';
+      if (src.charAt(i) === '{') {
+        i++;
+        var inner = parseSeq(true);
+        if (src.charAt(i) === '}') i++;
+        return inner;
+      }
+      return readAtom();
+    }
+
+    function applyCommand(name) {
+      if (name === 'frac' || name === 'dfrac' || name === 'tfrac' || name === 'cfrac') {
+        var num = readGroup(), den = readGroup();
+        return '<span class="frac"><span class="num">' + num +
+               '</span><span class="den">' + den + '</span></span>';
+      }
+      if (name === 'binom' || name === 'dbinom' || name === 'tbinom') {
+        var bn = readGroup(), bd = readGroup();
+        return '<span class="binom"><span class="bpar">(</span><span class="bstack">' +
+               '<span class="num">' + bn + '</span><span class="den">' + bd + '</span>' +
+               '</span><span class="bpar">)</span></span>';
+      }
+      if (name === 'sqrt') {
+        var idx = '';
+        skipSpaces();
+        if (src.charAt(i) === '[') {
+          var e = src.indexOf(']', i + 1);
+          if (e > 0) { idx = latexToHtml(src.slice(i + 1, e)); i = e + 1; }
+        }
+        return '<span class="sqrt">' + (idx ? '<sup class="rootidx">' + idx + '</sup>' : '') +
+               '<span class="rad">√</span><span class="radicand">' + readGroup() + '</span></span>';
+      }
+      if (name === 'text' || name === 'textrm' || name === 'textbf' || name === 'textit' ||
+          name === 'mathrm' || name === 'operatorname' || name === 'textnormal' || name === 'mbox') {
+        var raw = readRawGroup();
+        return '<span class="m-text' + (name === 'textbf' ? ' m-bold' : '') + '">' + esc(raw) + '</span>';
+      }
+      if (Object.prototype.hasOwnProperty.call(MATH_STYLES, name)) {
+        return '<span class="m-' + MATH_STYLES[name] + '">' + readGroup() + '</span>';
+      }
+      if (Object.prototype.hasOwnProperty.call(MATH_ACCENTS, name)) {
+        return '<span class="m-accent">' + readGroup() + MATH_ACCENTS[name] + '</span>';
+      }
+      if (name === 'boxed' || name === 'fbox') {
+        return '<span class="m-boxed">' + readGroup() + '</span>';
+      }
+      if (name === 'begin' || name === 'end') { readRawGroup(); return ''; }
+      if (Object.prototype.hasOwnProperty.call(MATH_IGNORED, name)) return '';
+      if (Object.prototype.hasOwnProperty.call(MATH_SYMBOLS, name)) return esc(MATH_SYMBOLS[name]);
+      return esc(name); /* 未知命令降级显示命令名，不吞内容 */
+    }
+
+    function readCommand() {
+      i++; /* 跳过反斜杠 */
+      if (i >= src.length) return '';
+      var c = src.charAt(i);
+      if (c === '\\') { i++; return '<br>'; }
+      var name;
+      if (/[a-zA-Z]/.test(c)) {
+        var m = /^[a-zA-Z]+/.exec(src.slice(i));
+        name = m ? m[0] : c;
+        i += name.length;
+        if (src.charAt(i) === ' ') i++;
+      } else {
+        name = c; i++;
+      }
+      return applyCommand(name);
+    }
+
+    function readAtom() {
+      if (i >= src.length) return '';
+      var c = src.charAt(i);
+      if (c === '{') { i++; var inner = parseSeq(true); if (src.charAt(i) === '}') i++; return inner; }
+      if (c === '\\') return readCommand();
+      i++;
+      if (c === '\n') return '<br>';
+      if (c === ' ' || c === '\t' || c === '~') return '\u00a0';
+      if (/[a-zA-Z]/.test(c)) return '<i class="mi">' + c + '</i>';
+      return esc(c);
+    }
+
+    function parseSeq(stopAtBrace) {
+      var out = '';
+      while (i < src.length) {
+        var c = src.charAt(i);
+        if (stopAtBrace && c === '}') break;
+        if (c === '^' || c === '_') {
+          i++;
+          var a = readAtom();
+          out += c === '^' ? '<sup>' + a + '</sup>' : '<sub>' + a + '</sub>';
+          continue;
+        }
+        out += readAtom();
+      }
+      return out;
+    }
+
+    return parseSeq(false);
+  }
+
+  /* 混排文本（中文 + LaTeX 公式）→ HTML；rawMode=true 时只转义，显示原始 LaTeX */
+  function renderMathText(raw, rawMode) {
+    raw = String(raw == null ? '' : raw);
+    if (rawMode) return esc(raw).replace(/\r?\n/g, '<br>');
+    var out = '', plain = '', i = 0;
+
+    function flushPlain() {
+      if (!plain) return;
+      // 文本里也可能出现裸 LaTeX 命令或 x^2 这类上下标，交给同一解析器处理
+      var hasMath = /\\[a-zA-Z]|[_^][0-9a-zA-Z(]/.test(plain);
+      out += hasMath ? latexToHtml(plain) : esc(plain).replace(/\r?\n/g, '<br>');
+      plain = '';
+    }
+
+    while (i < raw.length) {
+      var rest = raw.slice(i), close = null, len = 0, display = false, isMath = false;
+      if (rest.indexOf('\\[') === 0) { close = '\\]'; len = 2; display = true; isMath = true; }
+      else if (rest.indexOf('\\(') === 0) { close = '\\)'; len = 2; isMath = true; }
+      else if (rest.indexOf('$$') === 0) { close = '$$'; len = 2; display = true; isMath = true; }
+      else if (rest.charAt(0) === '$' && (i === 0 || raw.charAt(i - 1) !== '\\')) {
+        close = '$'; len = 1; isMath = true;
+      }
+      if (isMath) {
+        var end = raw.indexOf(close, i + len);
+        if (end < 0) {
+          /* 流式场景：公式还没输出完，尾部按原文显示，闭合后自动转为公式 */
+          flushPlain();
+          out += '<span class="math-pending">' +
+                 esc(raw.slice(i + len)).replace(/\r?\n/g, '<br>') + '</span>';
+          i = raw.length;
+          break;
+        }
+        flushPlain();
+        out += '<span class="math' + (display ? ' math-block' : '') + '">' +
+               latexToHtml(raw.slice(i + len, end)) + '</span>';
+        i = end + close.length;
+        continue;
+      }
+      plain += raw.charAt(i);
+      i++;
+    }
+    flushPlain();
+    return out;
+  }
+  /* MATH_RENDERER_END */
+
+  // 由后端托管时走同源；若双击 HTML（file://）打开，则回连本机后端（后端已开启 CORS）
+  var API = location.protocol === 'file:' ? 'http://localhost:8080' : '';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var mode = 'image';
+  var pickedFile = null;
+  var running = false;
+  var controller = null;
+  var contentRaw = '';
+
+  var dropZone = $('dropZone'), fileInput = $('fileInput'), preview = $('preview');
+  var previewImg = $('previewImg'), fileName = $('fileName');
+  var submitBtn = $('submitBtn'), clearBtn = $('clearBtn');
+  var streamText = $('streamText'), cards = $('cards'), placeholder = $('placeholder');
+  var transcriptText = $('transcriptText'), thinkingText = $('thinkingText');
+  var thinkingBlock = $('thinkingBlock'), errorBar = $('errorBar');
+
+  /* ---------- 初始化 ---------- */
+  fetch(API + '/api/config').then(function (r) { return r.json(); }).then(function (c) {
+    $('modelChip').textContent = '模型 · ' + c.model;
+    $('keyChip').textContent = c.apiKeyConfigured ? 'API Key 已配置' : '未配置 API Key';
+    $('keyChip').className = 'chip ' + (c.apiKeyConfigured ? 'ok' : 'warn');
+    $('showThinking').checked = !!c.showThinking;
+  }).catch(function () {
+    $('modelChip').textContent = '模型 · qwen3.8-max';
+    $('keyChip').textContent = '后端未连接';
+    $('keyChip').className = 'chip bad';
+  });
+
+  /* ---------- 模式切换 ---------- */
+  document.querySelectorAll('.tab').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
+      tab.classList.add('active');
+      mode = tab.dataset.mode;
+      var isQuestion = mode === 'question';
+      $('questionBox').style.display = isQuestion ? 'block' : 'none';
+      $('uploadLabel').textContent = isQuestion ? '上传学生作答图片' : '上传作业图片';
+      $('uploadNote').textContent = isQuestion
+        ? '只需拍摄学生手写答案区域；题干已在上方以文本给出。'
+        : '包含题干与学生手写作答的整张作业照片。';
+    });
+  });
+
+  /* ---------- 图片选择 / 拖拽 ---------- */
+  dropZone.addEventListener('click', function () { fileInput.click(); });
+  fileInput.addEventListener('change', function (e) { if (e.target.files[0]) setFile(e.target.files[0]); });
+  dropZone.addEventListener('dragover', function (e) { e.preventDefault(); dropZone.classList.add('drag'); });
+  dropZone.addEventListener('dragleave', function () { dropZone.classList.remove('drag'); });
+  dropZone.addEventListener('drop', function (e) {
+    e.preventDefault(); dropZone.classList.remove('drag');
+    if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+  });
+  $('removeFile').addEventListener('click', function () { setFile(null); });
+
+  function setFile(file) {
+    pickedFile = file;
+    fileInput.value = '';
+    if (!file) {
+      preview.style.display = 'none';
+      fileName.textContent = '';
+      previewImg.removeAttribute('src');
+      return;
+    }
+    previewImg.src = URL.createObjectURL(file);
+    fileName.textContent = file.name + ' · ' + (file.size / 1024 / 1024).toFixed(2) + ' MB';
+    preview.style.display = 'block';
+  }
+
+  /* ---------- 结果区 ---------- */
+  function setStatus(text, state) {
+    $('statusText').textContent = text;
+    $('statusDot').className = 'dot ' + (state || '');
+  }
+  function setStage(stage) {
+    $('step1').className = 'step';
+    $('step2').className = 'step';
+    if (stage === 'transcribe') $('step1').classList.add('active');
+    if (stage === 'grade') { $('step1').classList.add('done'); $('step2').classList.add('active'); }
+    if (stage === 'done') { $('step1').classList.add('done'); $('step2').classList.add('done'); }
+  }
+  function showError(message) {
+    errorBar.textContent = message;
+    errorBar.style.display = 'block';
+  }
+  function resetResult() {
+    errorBar.style.display = 'none';
+    contentRaw = '';
+    streamText.textContent = '';
+    streamText.style.display = 'block';
+    streamText.innerHTML = '<span class="caret"></span>';
+    cards.style.display = 'none';
+    cards.innerHTML = '';
+    placeholder.style.display = 'none';
+    transcriptText.textContent = '（转录中…）';
+    thinkingText.textContent = '（暂无）';
+    thinkingBlock.style.display = $('showThinking').checked ? 'block' : 'none';
+    setStage('transcribe');
+  }
+  clearBtn.addEventListener('click', function () {
+    if (running) return;
+    contentRaw = '';
+    streamText.style.display = 'none';
+    streamText.textContent = '';
+    cards.style.display = 'none';
+    cards.innerHTML = '';
+    placeholder.style.display = 'block';
+    transcriptText.textContent = '（暂无）';
+    thinkingText.textContent = '（暂无）';
+    errorBar.style.display = 'none';
+    $('step1').className = 'step'; $('step2').className = 'step';
+    setStatus('等待提交', '');
+  });
+
+  /* 把模型输出的纯文本渲染成每题一张卡片 */
+  function renderGrading(text) {
+    var lines = text.split('\n'), html = '', current = null;
+    function flush() {
+      if (current) { html += '<div class="q-card">' + current.join('') + '</div>'; current = null; }
+    }
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line) continue;
+      if (line.charAt(0) === '第' && line.indexOf('题') >= 0 && line.length < 24) {
+        flush();
+        current = ['<div class="q-title">' + esc(line) + '</div>'];
+        continue;
+      }
+      if (line.indexOf('【总分】') >= 0) {
+        flush();
+        html += '<div class="total-banner">' + esc(line) + '</div>';
+        continue;
+      }
+      var cls = 'q-line';
+      if (line.indexOf('判定') >= 0) {
+        if (line.indexOf('✅') >= 0) cls += ' ok';
+        else if (line.indexOf('❌') >= 0 || line.indexOf('未作答') >= 0) cls += ' bad';
+        else if (line.indexOf('⚠️') >= 0) cls += ' warn';
+      }
+      if (line.indexOf('得分') >= 0) cls += ' score';
+      var item = '<div class="' + cls + '">' + esc(line) + '</div>';
+      if (current) current.push(item); else html += item;
+    }
+    flush();
+    return html || '<div class="raw-stream">' + esc(text) + '</div>';
+  }
+
+  /* ---------- SSE 事件处理 ---------- */
+  function handleEvent(evt) {
+    if (evt.type === 'stage') {
+      setStage(evt.stage);
+      setStatus(evt.label || '处理中…', 'run');
+    } else if (evt.type === 'transcript') {
+      transcriptText.textContent = evt.text || '（空）';
+    } else if (evt.type === 'delta') {
+      if (evt.kind === 'transcript') {
+        transcriptText.textContent = transcriptText.textContent.indexOf('（转录中') === 0
+          ? evt.text : transcriptText.textContent + evt.text;
+      } else if (evt.kind === 'reasoning') {
+        if (thinkingText.textContent === '（暂无）') thinkingText.textContent = '';
+        thinkingText.textContent += evt.text;
+        thinkingText.scrollTop = thinkingText.scrollHeight;
+      } else if (evt.kind === 'content') {
+        contentRaw += evt.text;
+        streamText.textContent = contentRaw;
+      }
+    } else if (evt.type === 'done') {
+      streamText.style.display = 'none';
+      cards.innerHTML = renderGrading(contentRaw.trim());
+      cards.style.display = 'block';
+      setStage('done');
+      setStatus('批改完成', 'ok');
+    } else if (evt.type === 'error') {
+      showError(evt.message || '批改失败');
+      setStatus('批改失败', 'bad');
+    }
+  }
+
+  function finish() {
+    running = false;
+    controller = null;
+    submitBtn.textContent = '开始批改';
+    submitBtn.classList.remove('stop');
+  }
+
+  /* ---------- 提交 + 流式读取 ---------- */
+  submitBtn.addEventListener('click', function () {
+    if (running) {
+      if (controller) controller.abort();
+      finish();
+      setStatus('已停止', '');
+      return;
+    }
+    if (!pickedFile) { showError('请先选择一张图片'); return; }
+    var questionText = $('questionText').value.trim();
+    if (mode === 'question' && !questionText) { showError('请填写题干文本'); return; }
+
+    var form = new FormData();
+    form.append('mode', mode);
+    form.append('questionText', questionText);
+    form.append('showThinking', $('showThinking').checked ? 'true' : 'false');
+    form.append('image', pickedFile);
+
+    resetResult();
+    running = true;
+    controller = new AbortController();
+    submitBtn.textContent = '⏹ 停止批改';
+    submitBtn.classList.add('stop');
+    setStatus('正在连接模型…', 'run');
+
+    fetch(API + '/api/grade/stream', { method: 'POST', body: form, signal: controller.signal })
+      .then(function (response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status + '，请确认后端已启动');
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder('utf-8');
+        var buffer = '';
+        function pump() {
+          return reader.read().then(function (result) {
+            if (result.done) {
+              if (buffer.trim()) handleLine(buffer);
+              if (running) { setStatus('流已结束', ''); finish(); }
+              return;
+            }
+            buffer += decoder.decode(result.value, { stream: true });
+            var pos;
+            while ((pos = buffer.indexOf('\n')) >= 0) {
+              var line = buffer.slice(0, pos);
+              buffer = buffer.slice(pos + 1);
+              handleLine(line);
+            }
+            return pump();
+          });
+        }
+        function handleLine(line) {
+          line = line.replace(/\r$/, '');
+          if (line.indexOf('data:') !== 0) return;
+          var data = line.slice(5).trim();
+          if (!data || data === '[DONE]') return;
+          try { handleEvent(JSON.parse(data)); } catch (ignore) { /* 忽略不完整帧 */ }
+        }
+        return pump();
+      })
+      .catch(function (err) {
+        if (err.name === 'AbortError') {
+          setStatus('已停止', '');
+        } else {
+          showError('请求失败：' + err.message);
+          setStatus('请求失败', 'bad');
+        }
+        finish();
+      });
+  });
+</script>
+</body>
+</html>
