@@ -36,16 +36,14 @@ public class GradeService {
 
     public void grade(GradeInput input, SseEmitter emitter) {
         try {
-            boolean modeB = "question".equalsIgnoreCase(input.mode());
-
             int imageCount = input.imageDataUrls().size();
             emit(emitter, "stage", Map.of("stage", "transcribe",
                     "label", "阶段一 · 作业转录（" + imageCount + " 张图片）"));
 
             // ---------- 阶段一：只转录，不解题，避免模型先算出答案再「脑补」手写内容 ----------
-            String transcribePrompt = modeB ? Prompts.TRANSCRIBE_ANSWER_ONLY : Prompts.TRANSCRIBE_FULL;
+            String transcribePrompt = Prompts.TRANSCRIBE;
             if (imageCount > 1) {
-                transcribePrompt += modeB ? Prompts.MULTI_IMAGE_ANSWER : Prompts.MULTI_IMAGE_FULL;
+                transcribePrompt += Prompts.MULTI_IMAGE;
             }
 
             // OpenAI 兼容多图写法：图片按上传顺序连续排布，最后一个 text 给出转录要求
@@ -67,7 +65,7 @@ public class GradeService {
                 }
             });
 
-            String transcript = buildTranscript(input, stage1Text, modeB);
+            String transcript = stage1Text == null ? "" : stage1Text.trim();
             emit(emitter, "transcript", Map.of("text", transcript));
 
             // ---------- 阶段二：基于转录文本独立解题并批改，开启思考 ----------
@@ -88,19 +86,6 @@ public class GradeService {
         } catch (Exception e) {
             emitError(emitter, friendlyMessage(e));
         }
-    }
-
-    /**
-     * 模式 B 下题干由用户以文本给出，这里把「用户题干 + 转录出的作答」
-     * 拼成与模式 A 完全一致的转录格式，从而复用同一份批改提示词。
-     */
-    private String buildTranscript(GradeInput input, String stage1Text, boolean modeB) {
-        String answer = stage1Text == null ? "" : stage1Text.trim();
-        if (!modeB) {
-            return answer;
-        }
-        String question = input.questionText() == null ? "" : input.questionText().trim();
-        return "第1题\n题干：" + question + "\n学生答案：" + (answer.isEmpty() ? "未作答" : answer);
     }
 
     private void sendDelta(SseEmitter emitter, String kind, String text) {

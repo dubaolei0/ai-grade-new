@@ -57,22 +57,8 @@
   .panel-head .hint { font-size: 12px; color: var(--muted); }
   .panel-body { padding: 20px 22px 24px; }
 
-  .tabs { display: flex; gap: 6px; background: var(--soft); border: 1px solid var(--border); padding: 5px; border-radius: 12px; margin-bottom: 20px; }
-  .tab {
-    flex: 1; text-align: center; padding: 9px 8px; border-radius: 9px; cursor: pointer;
-    font-size: 13px; color: var(--muted); border: 0; background: transparent; transition: .18s;
-  }
-  .tab.active { background: #fff; color: var(--primary); font-weight: 600; box-shadow: 0 2px 8px rgba(30,41,90,.1); }
-
   .field-label { display: block; font-weight: 600; font-size: 13px; margin: 0 0 8px; }
   .field-note { font-size: 12px; color: var(--muted); margin: -4px 0 10px; }
-
-  textarea {
-    width: 100%; min-height: 110px; resize: vertical; padding: 12px 14px;
-    border: 1px solid var(--border); border-radius: 12px; outline: none;
-    font-family: inherit; font-size: 13px; color: var(--text); background: #fff;
-  }
-  textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,70,229,.12); }
 
   .drop {
     border: 2px dashed #cbd5e1; border-radius: 14px; padding: 22px 16px; text-align: center;
@@ -215,33 +201,8 @@
         <span class="hint">支持 JPG / PNG / WEBP / GIF / BMP</span>
       </div>
       <div class="panel-body">
-        <!-- HIDDEN_MODE_START (HTML) ==========================================
-             隐藏「题干文本 + 作答图片」(mode=question) 入口。
-             页面暂时只保留「整张作业图片（可多张）」一种形式。
-             按「注释」而非删除处理：后端 mode=question 能力完整保留，随时可恢复。
-             恢复步骤：
-               1) 删除本注释的首尾标记（保留内部两个 div 块）
-               2) 打开下方 JS 中 HIDDEN_MODE_START/END 两处注释
-               3) 提交处恢复 var questionText = $('questionText').value.trim()
-                  及 mode === 'question' 的空值校验
-             相关 CSS（.tabs / .tab / textarea）保持原样，恢复后直接生效。
-        =====================================================================
-        <div class="tabs">
-          <button class="tab active" data-mode="image">整张作业图片</button>
-          <button class="tab" data-mode="question">题干文本 + 作答图片</button>
-        </div>
-
-        <div id="questionBox" style="display:none">
-          <label class="field-label" for="questionText">题干文本</label>
-          <p class="field-note">填入题目内容（公式可用 LaTeX）；多题请用「第1题 / 第2题」自行分段。</p>
-          <textarea id="questionText" placeholder="例如：计算 $\sqrt{16} + 2^3$ 的值，并写出过程。"></textarea>
-          <div style="height:16px"></div>
-        </div>
-        =====================================================================
-             HIDDEN_MODE_END (HTML) -->
-
-        <label class="field-label" id="uploadLabel">上传作业图片（可多张）</label>
-        <p class="field-note" id="uploadNote">题干和作答分开在两张图里时请一并上传；模型按下面的序号顺序合并为一份作业。</p>
+        <label class="field-label">上传作业图片（可多张）</label>
+        <p class="field-note">题干和作答分开在两张图里时请一并上传；模型按下面的序号顺序合并为一份作业。</p>
         <div class="drop" id="dropZone">
           <div class="icon">🖼️</div>
           <div class="main">点击选择多张图片，或拖拽到此处</div>
@@ -540,7 +501,6 @@
   var API = location.protocol === 'file:' ? 'http://localhost:8080' : '';
 
   var $ = function (id) { return document.getElementById(id); };
-  var mode = 'image';           // 固定为「整张作业图片」模式（题干文本模式已隐藏，见下方说明）
   var pickedFiles = [];          // 按上传顺序排列：{ file, url }，顺序即模型看到的图片顺序
   var MAX_IMAGES = 8;
   var MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -570,25 +530,6 @@
     $('keyChip').textContent = '后端未连接';
     $('keyChip').className = 'chip bad';
   });
-
-  /* ---------- 模式切换【已隐藏】 ----------
-     tab 元素已在 HTML 中注释，页面固定 mode='image'。
-     恢复时删掉下面 HIDDEN_MODE_START/END 两行的注释标记即可（并同步恢复 HTML 与提交处）。
-  HIDDEN_MODE_START (JS)
-  document.querySelectorAll('.tab').forEach(function (tab) {
-    tab.addEventListener('click', function () {
-      document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
-      tab.classList.add('active');
-      mode = tab.dataset.mode;
-      var isQuestion = mode === 'question';
-      $('questionBox').style.display = isQuestion ? 'block' : 'none';
-      $('uploadLabel').textContent = isQuestion ? '上传学生作答图片（可多张）' : '上传作业图片（可多张）';
-      $('uploadNote').textContent = isQuestion
-        ? '答案分散在多张图片时请一并上传；题干已在上方以文本给出，按顺序合并转录。'
-        : '题干和作答分开在两张图里时请一并上传；模型按下面的序号顺序合并为一份作业。';
-    });
-  });
-  HIDDEN_MODE_END (JS) */
 
   /* ---------- 多图选择 / 拖拽 / 排序 ---------- */
   dropZone.addEventListener('click', function () { fileInput.click(); });
@@ -834,21 +775,8 @@
       return;
     }
     if (!pickedFiles.length) { showError('请先选择至少一张图片'); return; }
-    /* HIDDEN_MODE_START (JS) ==============================================
-       题干文本模式已隐藏：questionBox 被注释后 $('questionText') 为 null，
-       不能再直接取 .value，否则点击「开始批改」会立即抛 TypeError。
-       下面用空串替代，后端在 mode=image 时忽略 questionText，行为不变。
-       恢复时：删掉本块首尾标记（启用内部两行），并移除下方 var questionText = '';
-    =====================================================================
-    var questionText = $('questionText').value.trim();
-    if (mode === 'question' && !questionText) { showError('请填写题干文本'); return; }
-    =====================================================================
-       HIDDEN_MODE_END (JS) */
-    var questionText = '';
 
     var form = new FormData();
-    form.append('mode', mode);
-    form.append('questionText', questionText);
     form.append('showThinking', $('showThinking').checked ? 'true' : 'false');
     // 同名多字段：Spring 绑定为 List<MultipartFile> images，append 顺序即模型看到的图片顺序
     pickedFiles.forEach(function (p) { form.append('images', p.file); });

@@ -96,7 +96,7 @@ public final class AiGradeCli {
             {transcript}
             """;
 
-    /** 多图补充提示：与 Prompts.MULTI_IMAGE_FULL 保持一致。 */
+    /** 多图补充提示：与 Prompts.MULTI_IMAGE 保持一致。 */
     private static final String MULTI_IMAGE_HINT = """
             补充说明：本次提供了多张图片，它们是同一份作业的不同部分（题干与学生作答可能分别在不同图片中，也可能一页拍不完）。
             请按图片提供的先后顺序，把它们当作一份连续作业来转录：

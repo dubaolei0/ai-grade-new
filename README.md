@@ -1,6 +1,6 @@
 # AI 智能作业批改（Spring Boot + 阿里云百炼 Qwen）
 
-一个可直接运行的 Spring Boot 项目：一次上传一张或多张学生作业图片，或「题干文本 + 多张作答图片」，由大模型完成**转录 → 解题批改**两个阶段的批改，并在单页前端实时流式展示转录结果、思考过程与评分。
+一个可直接运行的 Spring Boot 项目：一次上传一张或多张学生作业图片，由大模型完成**转录 → 解题批改**两个阶段的批改，并在单页前端实时流式展示转录结果、思考过程与评分。
 
 ## 一、功能与原理
 
@@ -11,12 +11,7 @@
 | 阶段一 · 转录 | 多张图片 + `transcribe_prompt` | `false` | 只照原样转录题干与学生答案，不解题、不判断对错 |
 | 阶段二 · 批改 | `grade_prompt` + 转录文本 | `true` | 仅依据题干独立求标准答案，比对打分并按固定格式输出 |
 
-> **当前页面状态**：「题干文本 + 作答图片」入口已在前端 `index.html` 中**注释隐藏**，页面暂时只有「作业图片（可多张）」一种形式；后端 `mode=question` 能力与接口参数完整保留，仍可用 curl / 其他客户端调用。恢复方法见 `index.html` 中 `HIDDEN_MODE_START (HTML)` 注释块内的三步说明。
-
-两种批改模式（**都支持一次上传多张图片**）：
-
-- **作业图片**（`mode=image`）：图片里既有题干也有手写答案 → 原版 `transcribe_prompt` 逐题转录。题干和作答分开拍在两张图里时，把两张一起上传即可。
-- **题干文本 + 作答图片**（`mode=question`）：题干由用户以文本给出，图片只拍手写答案（答案分散在多张图里也可一并上传）→ 用「仅转录作答」的提示词变体转录，后端把题干与转录答案拼成与模式 A **完全一致的转录格式**，从而复用同一份 `grade_prompt`。
+**批改方式**：上传作业图片（**支持一次上传多张**）。图片里既有题干也有手写答案 → 原版 `transcribe_prompt` 逐题转录；题干和作答分开拍在两张图里时，把两张一起上传，用缩略图下的 ← → 把题干图排到前面即可。
 
 **多图合并转录**：前端按缩略图序号顺序，用同名 `images` 字段提交全部图片；后端转成多个 `image_url` part 连续放进 `messages[0].content`。图片数 > 1 时会在转录提示词后追加合并说明，要求模型把全部图片当作**同一份作业**：跨图找题干、找对应作答、逐题配对，同一题只输出一次，不重复也不遗漏 —— 避免模型把「题目图」和「答案图」各转录一遍。单图时提示词与原来完全一致，行为不变。
 
@@ -41,7 +36,7 @@ ai-grade/
     │   │   ├── DashScopeClient.java          流式 chat/completions 客户端
     │   │   └── GradeService.java            两阶段编排 + SSE 事件
     │   └── support/
-    │       ├── Prompts.java                  转录 / 批改提示词 + 两份多图补充
+    │       ├── Prompts.java                  转录 / 批改提示词 + 一份多图补充
     │       └── ImageUtils.java               图片 -> base64 data URL
     └── resources/
         ├── application.yml
@@ -88,7 +83,7 @@ java -jar target/ai-grade-1.0.0.jar
 
 ### 3. 访问
 
-浏览器打开 **http://localhost:8080/** 即可（端口以 `application.yml` 的 `server.port` 为准；若改成了 8088 就访问 8088，前端页面由后端托管，无需额外起服务）。
+浏览器打开 **http://localhost:8088/** 即可（端口以 `application.yml` 的 `server.port` 为准；前端页面由后端托管，无需额外起服务）。
 
 也可以直接双击 `src/main/resources/static/index.html` 打开：页面在 `file://` 协议下会自动回连 `http://localhost:8080`，后端已开启 CORS。
 
@@ -124,8 +119,6 @@ java -jar target/ai-grade-1.0.0.jar
 
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
-| `mode` | string | `image`（默认）/ `question` |
-| `questionText` | string | `mode=question` 时必填，题干文本 |
 | `showThinking` | boolean | 是否推送思考过程，默认 `true` |
 | `images` | file（可重复） | 一张或多张图片，重复写同名 `-F "images=@..."` 即可；**顺序即模型看到的图片顺序** |
 | `image` | file | 旧的单图参数，保留兼容；仅当 `images` 为空时生效 |
@@ -135,8 +128,7 @@ java -jar target/ai-grade-1.0.0.jar
 curl 示例（题干图 + 答案图，两张一起批改）：
 
 ```bash
-curl -N -X POST http://localhost:8080/api/grade/stream \
-  -F "mode=image" \
+curl -N -X POST http://localhost:8088/api/grade/stream \
   -F "showThinking=true" \
   -F "images=@题目页.jpg" \
   -F "images=@作答页.jpg"
@@ -145,19 +137,8 @@ curl -N -X POST http://localhost:8080/api/grade/stream \
 单图 / 旧参数写法仍然可用：
 
 ```bash
-curl -N -X POST http://localhost:8080/api/grade/stream \
-  -F "mode=image" \
+curl -N -X POST http://localhost:8088/api/grade/stream \
   -F "image=@学生作答题.jpg"
-```
-
-题干文本模式（作答也可多张）：
-
-```bash
-curl -N -X POST http://localhost:8080/api/grade/stream \
-  -F "mode=question" \
-  -F "questionText=计算 √16 + 2³ 的值" \
-  -F "images=@学生答案第1页.jpg" \
-  -F "images=@学生答案第2页.jpg"
 ```
 
 SSE 事件（`data:` 行为一行 JSON；`label` 里的张数由后端按实际收到的图片数给出）：
@@ -285,12 +266,153 @@ java src/main/java/com/yuanxuan/aigrade/cli/AiGradeCli.java 学生作答题.jpg
 - **HTTP 404 / model not found**：模型名与账号地域不匹配，按第四节改 `dashscope.model`。
 - **批改很慢**：阶段二开启了思考，题量多时可能耗时 1~3 分钟；SSE 超时已设为 10 分钟。
 - **中文乱码**：SSE 事件已用 UTF-8 字节写出；若自行改造请勿改回 String 写出。
-- **题干和答案在两张图里**：模式 A 把两张一起上传即可，用缩略图下的 ← → 把题干图排到前面；若题干能直接录入文本，也可用模式 B。
+- **题干和答案在两张图里**：把两张一起上传即可，用缩略图下的 ← → 把题干图排到前面。
 - **多图只识别了一部分**：确认张数 ≤ 8、单张 ≤ 20MB；模型跨图配对依赖题号清晰，尽量让每张图都带可辨认的题号。
 - **图片过大**：单张超过 20MB 会被拒绝，建议压缩后再上传。
 - **公式还是显示成源码**：确认浏览器已刷新到新页面（旧页面可能被缓存，强制刷新一次）；勾选「原始 LaTeX」会刻意显示源码，取消勾选即可。
-- **启动日志显示端口不是 8080**：若环境里存在 `SERVER_PORT` / `SERVER__PORT` 一类环境变量，Spring Boot 宽松绑定会覆盖 `server.port`。显式指定即可：`java -jar target/ai-grade-1.0.0.jar --server.port=8080`。若确实改用其他端口，直接双击 HTML 打开时请同步修改 `index.html` 顶部的 `API` 常量。
+- **启动日志显示端口不是 8088**：若环境里存在 `SERVER_PORT` / `SERVER__PORT` 一类环境变量，Spring Boot 宽松绑定会覆盖 `server.port`。显式指定即可：`java -jar target/ai-grade-1.0.0.jar --server.port=8088`。若确实改用其他端口，直接双击 HTML 打开时请同步修改 `index.html` 顶部的 `API` 常量。
 
 ## 十、技术栈
 
 Spring Boot 3.2.5 · Java 21 · JDK 内置 HttpClient（无第三方 HTTP 依赖）· Jackson · 原生 HTML/CSS/JS 单页（无前端框架、无 CDN，可离线打开）· 内置轻量 LaTeX 渲染器。
+
+## 十一、服务器部署（可执行 jar）
+
+前端页面已经打进 jar，走同源访问，所以**服务器只需要 JDK/JRE 21，不需要装 Maven，也不需要单独部署前端**。当前 `server.port=8088`，`dashscope.base-url` 为自定义的百炼兼容地址，需保证服务器能出网访问该 HTTPS 地址。
+
+### 1. 本机打包（Windows PowerShell）
+
+```powershell
+cd D:\yuanxuan\ai-grade
+mvn clean package -DskipTests
+# 产物：target\ai-grade-1.0.0.jar（约 19MB，含静态页面，可直接运行）
+```
+
+> 若本机 IDEA 正在以调试模式运行（classpath 指向 `target\classes`），**不要加 `clean`**，改用 `mvn package -DskipTests`；或先停掉 IDEA 里的运行实例再 clean，否则会删掉运行中的资源目录。
+> 本机 Maven 不在 PATH 时，用全路径 `D:\apache-maven-3.8.4\bin\mvn.cmd`。
+
+### 2. 上传到服务器
+
+```powershell
+scp D:\yuanxuan\ai-grade\target\ai-grade-1.0.0.jar root@<服务器IP>:/opt/ai-grade/
+```
+
+服务器端先建目录并确认 JDK 版本：
+
+```bash
+mkdir -p /opt/ai-grade
+java -version        # 必须是 21；JRE 21 即可，无需编译器
+# 未安装时：Ubuntu/Debian: apt install -y openjdk-21-jre-headless
+#           CentOS/RHEL : dnf install -y java-21-openjdk-headless
+```
+
+### 3. 前台试跑（先确认能起来）
+
+```bash
+cd /opt/ai-grade
+export DASHSCOPE_API_KEY='sk-你的百炼APIKey'
+java -jar ai-grade-1.0.0.jar --server.port=8088
+```
+
+看到 `Started AiGradeApplication` 后，另开终端验证：
+
+```bash
+curl http://127.0.0.1:8088/api/config
+# 期望 {"model":"qwen3.8-max",...,"apiKeyConfigured":true}
+curl -I http://127.0.0.1:8088/          # 期望 200
+```
+
+### 4. 后台常驻
+
+**简单方式（nohup）**：
+
+```bash
+cd /opt/ai-grade
+export DASHSCOPE_API_KEY='sk-你的百炼APIKey'
+nohup java -Xms256m -Xmx1g -jar ai-grade-1.0.0.jar \
+  --server.port=8088 --logging.level.com.yuanxuan.aigrade=INFO \
+  > app.log 2>&1 &
+echo $! > app.pid
+tail -f app.log
+```
+
+**推荐方式（systemd，开机自启 + 崩溃自动拉起）**：新建 `/etc/systemd/system/ai-grade.service`
+
+```ini
+[Unit]
+Description=AI Grade (Spring Boot)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ai-grade
+Environment="DASHSCOPE_API_KEY=sk-你的百炼APIKey"
+ExecStart=/usr/bin/java -Xms256m -Xmx1g -jar /opt/ai-grade/ai-grade-1.0.0.jar --server.port=8088 --logging.level.com.yuanxuan.aigrade=INFO
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> `ExecStart` 里的 java 请写绝对路径（用 `which java` 查），systemd 不继承登录 shell 的 PATH。
+
+```bash
+systemctl daemon-reload
+systemctl enable --now ai-grade
+systemctl status ai-grade
+journalctl -u ai-grade -f        # 看日志
+```
+
+停止 / 更新版本：
+
+```bash
+systemctl stop ai-grade
+cp /path/to/new/ai-grade-1.0.0.jar /opt/ai-grade/ai-grade-1.0.0.jar
+systemctl start ai-grade
+```
+
+### 5. 放行端口
+
+```bash
+firewall-cmd --add-port=8088/tcp --permanent && firewall-cmd --reload   # firewalld
+ufw allow 8088/tcp && ufw reload                                        # ufw
+```
+
+云服务器还需在**控制台安全组**放行 8088。之后访问 `http://<服务器IP>:8088/`。
+
+真实批改链路验证（应看到 SSE 事件流，中文不乱码）：
+
+```bash
+curl -N -X POST http://127.0.0.1:8088/api/grade/stream \
+  -F 'showThinking=true' -F 'images=@/opt/ai-grade/test.jpg'
+```
+
+### 6. Nginx 反代（用域名 / 80 / 443 时）
+
+```nginx
+server {
+    listen 80;
+    server_name your.domain.com;
+    client_max_body_size 200m;        # 对应 multipart 180MB，否则多图上传被 Nginx 413 挡掉
+
+    location / {
+        proxy_pass http://127.0.0.1:8088;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;           # SSE 必须关缓冲，否则流式输出会攒到最后才出来
+        proxy_cache off;
+        proxy_read_timeout 600s;       # 阶段二开启思考，可能耗时 1~3 分钟
+        proxy_send_timeout 600s;
+    }
+}
+```
+
+### 部署注意
+
+- **API Key 安全**：当前 `application.yml` 的 `dashscope.api-key` 是**明文**填入的，会随 jar 一起发布到服务器。建议改成占位符 `api-key: ${DASHSCOPE_API_KEY:}`，重新打包，再由环境变量 / systemd `Environment` 注入。注意：改回占位符后，本机 IDEA 调试实例也必须设置 `DASHSCOPE_API_KEY` 才能跑。环境变量优先级高于 yml，不改 yml 也能用环境变量覆盖，但 jar 内仍留有明文。
+- **日志级别**：`application.yml` 里 `com.yuanxuan.aigrade: DEBUG` 是为开发调的，生产用启动参数 `--logging.level.com.yuanxuan.aigrade=INFO` 覆盖。
+- **不要用 `file://` 打开页面访问服务器**：`index.html` 在 `file://` 下硬编码回连 `http://localhost:8080`，部署后请统一通过 `http://域名/` 同源访问。
+- **端口被环境变量顶掉**：若服务器环境存在 `SERVER_PORT` / `SERVER__PORT`，Spring Boot 宽松绑定会覆盖 `server.port`，启动命令里显式带 `--server.port=8088` 即可。
+- **Windows 服务器**：`$env:DASHSCOPE_API_KEY='sk-xxx'; java -jar D:\ai-grade\ai-grade-1.0.0.jar --server.port=8088`，常驻可用计划任务或 `Start-Process -WindowStyle Hidden`。

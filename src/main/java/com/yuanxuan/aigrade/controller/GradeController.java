@@ -48,18 +48,14 @@ public class GradeController {
     }
 
     /**
-     * 批改接口：multipart 上传一张或多张图片，SSE 流式回推「转录 / 思考 / 批改结果」。
+     * 批改接口：multipart 上传一张或多张作业图片，SSE 流式回推「转录 / 思考 / 批改结果」。
      *
-     * @param mode         image | question
-     * @param questionText 模式 question 下的题干文本
      * @param showThinking 是否推送思考过程
      * @param images       按上传顺序排列的多张图片（题干与作答可分在不同图片里）
      * @param image        旧的单图参数，保留以兼容已有 curl / 调用方
      */
     @PostMapping(value = "/grade/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter gradeStream(
-            @RequestParam(value = "mode", defaultValue = "image") String mode,
-            @RequestParam(value = "questionText", required = false, defaultValue = "") String questionText,
             @RequestParam(value = "showThinking", defaultValue = "true") boolean showThinking,
             @RequestParam(value = "images", required = false) List<MultipartFile> images,
             @RequestParam(value = "image", required = false) MultipartFile image) {
@@ -103,10 +99,6 @@ public class GradeController {
                 return emitter;
             }
         }
-        if ("question".equalsIgnoreCase(mode) && (questionText == null || questionText.isBlank())) {
-            failFast(emitter, "「题干文本 + 作答图片」模式下，请填写题干文本");
-            return emitter;
-        }
 
         final List<String> dataUrls = new ArrayList<>();
         try {
@@ -118,7 +110,7 @@ public class GradeController {
             return emitter;
         }
 
-        GradeInput input = new GradeInput(mode, questionText, dataUrls, showThinking);
+        GradeInput input = new GradeInput(dataUrls, showThinking);
         CompletableFuture.runAsync(() -> gradeService.grade(input, emitter));
         return emitter;
     }
