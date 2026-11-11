@@ -9,6 +9,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,8 +17,11 @@ import java.util.Map;
 /**
  * 两阶段批改编排（严格对齐 Python 示例的 grade() 流程）：
  *
- * 阶段一  chat([image_url, transcribe_prompt], thinking=False)  -> 转录文本
+ * 阶段一  chat([image_url..., transcribe_prompt], thinking=False)  -> 转录文本
  * 阶段二  chat(grade_prompt.replace("{transcript}", transcript), thinking=True) -> 批改结果
+ *
+ * 阶段一支持多张图片：多个 image_url 按上传顺序连续放在 content 前部；图片数 > 1 时追加
+ * 合并转录说明，让模型把「题干图」与「作答图」当作同一份作业跨图配对，而不是各转录一遍。
  */
 @Service
 public class GradeService {
@@ -34,18 +38,28 @@ public class GradeService {
         try {
             boolean modeB = "question".equalsIgnoreCase(input.mode());
 
-            emit(emitter, "stage", Map.of("stage", "transcribe", "label", "阶段一 · 作业转录"));
+            int imageCount = input.imageDataUrls().size();
+            emit(emitter, "stage", Map.of("stage", "transcribe",
+                    "label", "阶段一 · 作业转录（" + imageCount + " 张图片）"));
 
             // ---------- 阶段一：只转录，不解题，避免模型先算出答案再「脑补」手写内容 ----------
             String transcribePrompt = modeB ? Prompts.TRANSCRIBE_ANSWER_ONLY : Prompts.TRANSCRIBE_FULL;
+            if (imageCount > 1) {
+                transcribePrompt += modeB ? Prompts.MULTI_IMAGE_ANSWER : Prompts.MULTI_IMAGE_FULL;
+            }
 
-            Map<String, Object> imagePart = new LinkedHashMap<>();
-            imagePart.put("type", "image_url");
-            imagePart.put("image_url", Map.of("url", input.imageDataUrl()));
+            // OpenAI 兼容多图写法：图片按上传顺序连续排布，最后一个 text 给出转录要求
+            List<Map<String, Object>> content = new ArrayList<>();
+            for (String dataUrl : input.imageDataUrls()) {
+                Map<String, Object> imagePart = new LinkedHashMap<>();
+                imagePart.put("type", "image_url");
+                imagePart.put("image_url", Map.of("url", dataUrl));
+                content.add(imagePart);
+            }
             Map<String, Object> textPart = new LinkedHashMap<>();
             textPart.put("type", "text");
             textPart.put("text", transcribePrompt);
-            List<Map<String, Object>> content = List.of(imagePart, textPart);
+            content.add(textPart);
 
             String stage1Text = client.chatStream(content, false, (reasoning, text) -> {
                 if (text != null && !text.isEmpty()) {

@@ -1,6 +1,6 @@
 # AI 智能作业批改（Spring Boot + 阿里云百炼 Qwen）
 
-一个可直接运行的 Spring Boot 项目：上传学生作业图片，或「题干文本 + 作答图片」，由大模型完成**转录 → 解题批改**两个阶段的批改，并在单页前端实时流式展示转录结果、思考过程与评分。
+一个可直接运行的 Spring Boot 项目：一次上传一张或多张学生作业图片，或「题干文本 + 多张作答图片」，由大模型完成**转录 → 解题批改**两个阶段的批改，并在单页前端实时流式展示转录结果、思考过程与评分。
 
 ## 一、功能与原理
 
@@ -8,13 +8,15 @@
 
 | 阶段 | 输入 | `enable_thinking` | 作用 |
 | --- | --- | --- | --- |
-| 阶段一 · 转录 | 图片 + `transcribe_prompt` | `false` | 只照原样转录题干与学生答案，不解题、不判断对错 |
+| 阶段一 · 转录 | 多张图片 + `transcribe_prompt` | `false` | 只照原样转录题干与学生答案，不解题、不判断对错 |
 | 阶段二 · 批改 | `grade_prompt` + 转录文本 | `true` | 仅依据题干独立求标准答案，比对打分并按固定格式输出 |
 
-两种批改模式：
+两种批改模式（**都支持一次上传多张图片**）：
 
-- **整张作业图片**（`mode=image`）：图片里既有题干也有手写答案 → 原版 `transcribe_prompt` 逐题转录。
-- **题干文本 + 作答图片**（`mode=question`）：题干由用户以文本给出，图片只拍手写答案 → 用「仅转录作答」的提示词变体转录，后端把题干与转录答案拼成与模式 A **完全一致的转录格式**，从而复用同一份 `grade_prompt`。
+- **作业图片**（`mode=image`）：图片里既有题干也有手写答案 → 原版 `transcribe_prompt` 逐题转录。题干和作答分开拍在两张图里时，把两张一起上传即可。
+- **题干文本 + 作答图片**（`mode=question`）：题干由用户以文本给出，图片只拍手写答案（答案分散在多张图里也可一并上传）→ 用「仅转录作答」的提示词变体转录，后端把题干与转录答案拼成与模式 A **完全一致的转录格式**，从而复用同一份 `grade_prompt`。
+
+**多图合并转录**：前端按缩略图序号顺序，用同名 `images` 字段提交全部图片；后端转成多个 `image_url` part 连续放进 `messages[0].content`。图片数 > 1 时会在转录提示词后追加合并说明，要求模型把全部图片当作**同一份作业**：跨图找题干、找对应作答、逐题配对，同一题只输出一次，不重复也不遗漏 —— 避免模型把「题目图」和「答案图」各转录一遍。单图时提示词与原来完全一致，行为不变。
 
 流式链路：浏览器 `POST /api/grade/stream` → Spring `SseEmitter`（SSE）→ JDK 21 内置 `HttpClient` 流式调用百炼 `/chat/completions` → 逐块转发 `delta.reasoning_content` / `delta.content` 给前端。
 
@@ -30,14 +32,14 @@ ai-grade/
     │   ├── config/
     │   │   ├── DashScopeProperties.java      百炼配置（api-key / base-url / model）
     │   │   └── WebConfig.java                CORS（允许 file:// 直接打开页面）
-    │   ├── cli/AiGradeCli.java               纯 JDK 命令行版（Python 脚本 1:1）
-    │   ├── controller/GradeController.java   /api/config、/api/grade/stream
-    │   ├── model/GradeInput.java             批改输入 record
+    │   ├── cli/AiGradeCli.java               纯 JDK 命令行版（Python 脚本 1:1，支持多图）
+    │   ├── controller/GradeController.java   /api/config、/api/grade/stream（多图）
+    │   ├── model/GradeInput.java             批改输入 record（图片列表）
     │   ├── service/
     │   │   ├── DashScopeClient.java          流式 chat/completions 客户端
     │   │   └── GradeService.java            两阶段编排 + SSE 事件
     │   └── support/
-    │       ├── Prompts.java                  三份提示词
+    │       ├── Prompts.java                  转录 / 批改提示词 + 两份多图补充
     │       └── ImageUtils.java               图片 -> base64 data URL
     └── resources/
         ├── application.yml
@@ -84,7 +86,7 @@ java -jar target/ai-grade-1.0.0.jar
 
 ### 3. 访问
 
-浏览器打开 **http://localhost:8080/** 即可（前端页面由后端托管，无需额外起服务）。
+浏览器打开 **http://localhost:8080/** 即可（端口以 `application.yml` 的 `server.port` 为准；若改成了 8088 就访问 8088，前端页面由后端托管，无需额外起服务）。
 
 也可以直接双击 `src/main/resources/static/index.html` 打开：页面在 `file://` 协议下会自动回连 `http://localhost:8080`，后端已开启 CORS。
 
@@ -97,8 +99,10 @@ java -jar target/ai-grade-1.0.0.jar
 | `dashscope.model` | `qwen3.8-max` | 模型名，可用环境变量 `DASHSCOPE_MODEL` 覆盖 |
 | `dashscope.show-thinking` | `true` | 前端「显示思考过程」开关默认值 |
 | `dashscope.connect-timeout-seconds` | `15` | 连接超时 |
-| `server.port` | `8080` | 服务端口 |
-| `spring.servlet.multipart.max-file-size` | `20MB` | 上传图片上限 |
+| `server.port` | `8080` | 服务端口（当前 `application.yml` 为 8088） |
+| `spring.servlet.multipart.max-file-size` | `20MB` | 单张图片上限 |
+| `spring.servlet.multipart.max-request-size` | `180MB` | 单次请求总上限，供多张图片累加 |
+| `GradeController.MAX_IMAGES` | `8` | 一次最多图片张数（代码常量） |
 
 > **模型说明**：`qwen3.8-max` 是百炼当前旗舰模型，同时支持**视觉理解**（可直接传图片）与**思考模式**，正好覆盖本项目「图片转录 + 开启思考批改」的需求。如需锁定版本可改成快照名（如 `qwen3.8-max-0902`）；若账号尚未开通，改成已开通的模型名即可 —— 全部通过配置切换，无需改代码。
 
@@ -121,30 +125,43 @@ java -jar target/ai-grade-1.0.0.jar
 | `mode` | string | `image`（默认）/ `question` |
 | `questionText` | string | `mode=question` 时必填，题干文本 |
 | `showThinking` | boolean | 是否推送思考过程，默认 `true` |
-| `image` | file | 作业图片 / 作答图片 |
+| `images` | file（可重复） | 一张或多张图片，重复写同名 `-F "images=@..."` 即可；**顺序即模型看到的图片顺序** |
+| `image` | file | 旧的单图参数，保留兼容；仅当 `images` 为空时生效 |
 
-curl 示例：
+一次最多 8 张、单张 ≤ 20MB，超限返回 `type=error` 事件说明原因。前端缩略图下的 ← → 按钮调整的就是提交顺序，建议把「题干图」排在「答案图」前面。
+
+curl 示例（题干图 + 答案图，两张一起批改）：
 
 ```bash
 curl -N -X POST http://localhost:8080/api/grade/stream \
   -F "mode=image" \
   -F "showThinking=true" \
+  -F "images=@题目页.jpg" \
+  -F "images=@作答页.jpg"
+```
+
+单图 / 旧参数写法仍然可用：
+
+```bash
+curl -N -X POST http://localhost:8080/api/grade/stream \
+  -F "mode=image" \
   -F "image=@学生作答题.jpg"
 ```
 
-题干文本模式：
+题干文本模式（作答也可多张）：
 
 ```bash
 curl -N -X POST http://localhost:8080/api/grade/stream \
   -F "mode=question" \
   -F "questionText=计算 √16 + 2³ 的值" \
-  -F "image=@学生答案.jpg"
+  -F "images=@学生答案第1页.jpg" \
+  -F "images=@学生答案第2页.jpg"
 ```
 
-SSE 事件（`data:` 行为一行 JSON）：
+SSE 事件（`data:` 行为一行 JSON；`label` 里的张数由后端按实际收到的图片数给出）：
 
 ```json
-{"type":"stage","stage":"transcribe","label":"阶段一 · 作业转录"}
+{"type":"stage","stage":"transcribe","label":"阶段一 · 作业转录（2 张图片）"}
 {"type":"delta","kind":"transcript","text":"第1题\n"}
 {"type":"transcript","text":"第1题\n题干：...\n学生答案：..."}
 {"type":"stage","stage":"grade","label":"阶段二 · 解题与批改"}
@@ -187,19 +204,25 @@ javac -encoding UTF-8 -d target/cli-classes src/main/java/com/yuanxuan/aigrade/c
 java -cp target/cli-classes com.yuanxuan.aigrade.cli.AiGradeCli 学生作答题.jpg
 ```
 
+题目页与作答页分开时，直接按顺序传多个图片（会追加同一份多图合并提示）：
+
+```bash
+java -cp target/cli-classes com.yuanxuan.aigrade.cli.AiGradeCli 题目页.jpg 作答页.jpg
+```
+
 JDK 11+ 也支持单文件源码启动，无需先编译：
 
 ```bash
 java src/main/java/com/yuanxuan/aigrade/cli/AiGradeCli.java 学生作答题.jpg
 ```
 
-图片参数支持本地路径或 `http(s)://` URL，不传则使用默认的 `学生作答题.jpg`。
+图片参数支持本地路径或 `http(s)://` URL，可传多个、按参数顺序合并；不传则使用默认的 `学生作答题.jpg`。仅传一张时输出格式与 Python 版完全一致。
 
 ### 可用参数
 
 | 参数 | 说明 |
 | --- | --- |
-| 命令行第 1 个参数 | 作业图片路径 / URL |
+| 命令行参数（可多个） | 作业图片路径 / URL，按参数顺序合并为一份作业 |
 | 环境变量 `DASHSCOPE_API_KEY` | 百炼 API Key |
 | `-Ddashscope.apiKey=sk-xxx` | 同上，优先级更高 |
 | `-Ddashscope.model=xxx` | 覆盖模型名，默认 `qwen3.8-max` |
@@ -260,7 +283,9 @@ java src/main/java/com/yuanxuan/aigrade/cli/AiGradeCli.java 学生作答题.jpg
 - **HTTP 404 / model not found**：模型名与账号地域不匹配，按第四节改 `dashscope.model`。
 - **批改很慢**：阶段二开启了思考，题量多时可能耗时 1~3 分钟；SSE 超时已设为 10 分钟。
 - **中文乱码**：SSE 事件已用 UTF-8 字节写出；若自行改造请勿改回 String 写出。
-- **图片过大**：超过 20MB 会被拒绝，建议压缩后再上传。
+- **题干和答案在两张图里**：模式 A 把两张一起上传即可，用缩略图下的 ← → 把题干图排到前面；若题干能直接录入文本，也可用模式 B。
+- **多图只识别了一部分**：确认张数 ≤ 8、单张 ≤ 20MB；模型跨图配对依赖题号清晰，尽量让每张图都带可辨认的题号。
+- **图片过大**：单张超过 20MB 会被拒绝，建议压缩后再上传。
 - **公式还是显示成源码**：确认浏览器已刷新到新页面（旧页面可能被缓存，强制刷新一次）；勾选「原始 LaTeX」会刻意显示源码，取消勾选即可。
 - **启动日志显示端口不是 8080**：若环境里存在 `SERVER_PORT` / `SERVER__PORT` 一类环境变量，Spring Boot 宽松绑定会覆盖 `server.port`。显式指定即可：`java -jar target/ai-grade-1.0.0.jar --server.port=8080`。若确实改用其他端口，直接双击 HTML 打开时请同步修改 `index.html` 顶部的 `API` 常量。
 

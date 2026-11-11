@@ -82,9 +82,20 @@
   .drop .icon { font-size: 30px; line-height: 1; }
   .drop .main { margin-top: 8px; font-weight: 600; color: var(--primary); }
   .drop .sub { margin-top: 4px; font-size: 12px; color: var(--muted); }
-  .preview { display: none; margin-top: 12px; text-align: center; }
-  .preview img { max-width: 100%; max-height: 230px; border-radius: 12px; border: 1px solid var(--border); }
-  .preview .file-row { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; justify-content: center; gap: 12px; align-items: center; }
+  .preview { display: none; margin-top: 12px; }
+  .preview-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
+  .thumb { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; }
+  .thumb .imgbox { position: relative; height: 88px; background: #eef2f7; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb .badge { position: absolute; top: 4px; left: 4px; background: var(--primary); color: #fff; font-size: 11px; padding: 1px 6px; border-radius: 6px; }
+  .thumb .meta { padding: 5px 6px 2px; font-size: 11px; color: var(--muted); }
+  .thumb .meta .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thumb .ops { display: flex; justify-content: flex-start; align-items: center; gap: 3px; padding: 2px 6px 6px; }
+  .mini-btn { border: 1px solid var(--border); background: #fff; border-radius: 6px; font-size: 11px; padding: 2px 6px; cursor: pointer; color: var(--muted); }
+  .mini-btn:hover { border-color: var(--primary); color: var(--primary); }
+  .mini-btn:disabled { opacity: .35; cursor: default; }
+  .mini-btn.del { color: var(--bad); margin-left: auto; }
   .link-btn { border: 0; background: none; color: var(--bad); cursor: pointer; font-size: 12px; padding: 0; }
 
   .options { display: flex; align-items: center; justify-content: space-between; margin: 20px 0 16px; padding: 12px 14px; background: var(--soft); border-radius: 12px; border: 1px solid var(--border); }
@@ -188,7 +199,7 @@
   <header class="top">
     <div>
       <h1>AI 智能作业批改</h1>
-      <p>上传作业图片或「题干 + 作答图片」，两阶段转录与批改，避免模型脑补手写答案</p>
+      <p>支持一次上传多张图片（题干与作答可分开拍），两阶段转录与批改，避免模型脑补手写答案</p>
     </div>
     <div class="chips">
       <span class="chip" id="modelChip">模型加载中…</span>
@@ -216,17 +227,17 @@
           <div style="height:16px"></div>
         </div>
 
-        <label class="field-label" id="uploadLabel">上传作业图片</label>
-        <p class="field-note" id="uploadNote">包含题干与学生手写作答的整张作业照片。</p>
+        <label class="field-label" id="uploadLabel">上传作业图片（可多张）</label>
+        <p class="field-note" id="uploadNote">题干和作答分开在两张图里时请一并上传；模型按下面的序号顺序合并为一份作业。</p>
         <div class="drop" id="dropZone">
           <div class="icon">🖼️</div>
-          <div class="main">点击选择图片，或拖拽到此处</div>
-          <div class="sub">建议拍摄清晰、光线均匀，单张不超过 20MB</div>
+          <div class="main">点击选择多张图片，或拖拽到此处</div>
+          <div class="sub">最多 8 张，单张不超过 20MB；可用缩略图下方箭头调整顺序</div>
         </div>
-        <input type="file" id="fileInput" accept="image/*" style="display:none">
+        <input type="file" id="fileInput" accept="image/*" multiple style="display:none">
         <div class="preview" id="preview">
-          <img id="previewImg" alt="图片预览">
-          <div class="file-row"><span id="fileName"></span><button class="link-btn" id="removeFile">移除</button></div>
+          <div class="preview-head"><span id="fileCount"></span><button class="link-btn" id="removeFile">清空全部</button></div>
+          <div class="thumbs" id="thumbs"></div>
         </div>
 
         <div class="options">
@@ -517,7 +528,9 @@
 
   var $ = function (id) { return document.getElementById(id); };
   var mode = 'image';
-  var pickedFile = null;
+  var pickedFiles = [];          // 按上传顺序排列：{ file, url }，顺序即模型看到的图片顺序
+  var MAX_IMAGES = 8;
+  var MAX_FILE_BYTES = 20 * 1024 * 1024;
   var running = false;
   var controller = null;
   var contentRaw = '';          // 阶段二批改结果原文
@@ -527,7 +540,7 @@
   var rafId = 0;                // 流式渲染节流
 
   var dropZone = $('dropZone'), fileInput = $('fileInput'), preview = $('preview');
-  var previewImg = $('previewImg'), fileName = $('fileName');
+  var thumbs = $('thumbs'), fileCount = $('fileCount');
   var submitBtn = $('submitBtn'), clearBtn = $('clearBtn');
   var streamText = $('streamText'), cards = $('cards'), placeholder = $('placeholder');
   var transcriptText = $('transcriptText'), thinkingText = $('thinkingText');
@@ -553,37 +566,100 @@
       mode = tab.dataset.mode;
       var isQuestion = mode === 'question';
       $('questionBox').style.display = isQuestion ? 'block' : 'none';
-      $('uploadLabel').textContent = isQuestion ? '上传学生作答图片' : '上传作业图片';
+      $('uploadLabel').textContent = isQuestion ? '上传学生作答图片（可多张）' : '上传作业图片（可多张）';
       $('uploadNote').textContent = isQuestion
-        ? '只需拍摄学生手写答案区域；题干已在上方以文本给出。'
-        : '包含题干与学生手写作答的整张作业照片。';
+        ? '答案分散在多张图片时请一并上传；题干已在上方以文本给出，按顺序合并转录。'
+        : '题干和作答分开在两张图里时请一并上传；模型按下面的序号顺序合并为一份作业。';
     });
   });
 
-  /* ---------- 图片选择 / 拖拽 ---------- */
+  /* ---------- 多图选择 / 拖拽 / 排序 ---------- */
   dropZone.addEventListener('click', function () { fileInput.click(); });
-  fileInput.addEventListener('change', function (e) { if (e.target.files[0]) setFile(e.target.files[0]); });
+  fileInput.addEventListener('change', function (e) {
+    addFiles(e.target.files);
+    fileInput.value = '';
+  });
   dropZone.addEventListener('dragover', function (e) { e.preventDefault(); dropZone.classList.add('drag'); });
   dropZone.addEventListener('dragleave', function () { dropZone.classList.remove('drag'); });
   dropZone.addEventListener('drop', function (e) {
     e.preventDefault(); dropZone.classList.remove('drag');
-    if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+    addFiles(e.dataTransfer.files);
   });
-  $('removeFile').addEventListener('click', function () { setFile(null); });
+  $('removeFile').addEventListener('click', function () {
+    if (running) return;
+    clearFiles();
+  });
 
-  function setFile(file) {
-    pickedFile = file;
-    fileInput.value = '';
-    if (!file) {
-      preview.style.display = 'none';
-      fileName.textContent = '';
-      previewImg.removeAttribute('src');
-      return;
+  function addFiles(fileList) {
+    if (running) { showError('批改进行中，请先停止再更换图片'); return; }
+    if (!fileList || !fileList.length) return;
+    errorBar.style.display = 'none';
+    var skipped = [];
+    for (var i = 0; i < fileList.length; i++) {
+      var f = fileList[i];
+      if (pickedFiles.length >= MAX_IMAGES) {
+        skipped.push('超出最多 ' + MAX_IMAGES + ' 张的剩余部分');
+        break;
+      }
+      var isImg = /^image\//.test(f.type) || /\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(f.name || '');
+      if (!isImg) { skipped.push(f.name + '（非图片）'); continue; }
+      if (f.size > MAX_FILE_BYTES) { skipped.push(f.name + '（超过 20MB）'); continue; }
+      pickedFiles.push({ file: f, url: URL.createObjectURL(f) });
     }
-    previewImg.src = URL.createObjectURL(file);
-    fileName.textContent = file.name + ' · ' + (file.size / 1024 / 1024).toFixed(2) + ' MB';
-    preview.style.display = 'block';
+    if (skipped.length) showError('已跳过：' + skipped.join('、'));
+    renderThumbs();
   }
+
+  function clearFiles() {
+    pickedFiles.forEach(function (p) { URL.revokeObjectURL(p.url); });
+    pickedFiles = [];
+    renderThumbs();
+  }
+
+  function moveFile(index, delta) {
+    var j = index + delta;
+    if (j < 0 || j >= pickedFiles.length) return;
+    var tmp = pickedFiles[index];
+    pickedFiles[index] = pickedFiles[j];
+    pickedFiles[j] = tmp;
+    renderThumbs();
+  }
+
+  function renderThumbs() {
+    preview.style.display = pickedFiles.length ? 'block' : 'none';
+    fileCount.textContent = pickedFiles.length
+      ? '已选 ' + pickedFiles.length + ' / ' + MAX_IMAGES + ' 张 · 按序号传给模型' : '';
+    var html = '';
+    for (var i = 0; i < pickedFiles.length; i++) {
+      var p = pickedFiles[i], name = esc(p.file.name || '图片');
+      html += '<div class="thumb">'
+        + '<div class="imgbox"><span class="badge">第' + (i + 1) + '张</span>'
+        + '<img src="' + p.url + '" alt="第' + (i + 1) + '张预览"></div>'
+        + '<div class="meta"><div class="name" title="' + name + '">' + name + '</div>'
+        + '<div>' + (p.file.size / 1024 / 1024).toFixed(2) + ' MB</div></div>'
+        + '<div class="ops">'
+        + '<button class="mini-btn" data-act="left" data-i="' + i + '"' + (i === 0 ? ' disabled' : '') + ' title="前移">←</button>'
+        + '<button class="mini-btn" data-act="right" data-i="' + i + '"' + (i === pickedFiles.length - 1 ? ' disabled' : '') + ' title="后移">→</button>'
+        + '<button class="mini-btn del" data-act="del" data-i="' + i + '">移除</button>'
+        + '</div></div>';
+    }
+    thumbs.innerHTML = html;
+  }
+
+  thumbs.addEventListener('click', function (e) {
+    if (running) return;
+    var btn = e.target.closest ? e.target.closest('button[data-act]') : null;
+    if (!btn) return;
+    var i = parseInt(btn.getAttribute('data-i'), 10);
+    var act = btn.getAttribute('data-act');
+    if (act === 'left') moveFile(i, -1);
+    else if (act === 'right') moveFile(i, 1);
+    else if (act === 'del') {
+      URL.revokeObjectURL(pickedFiles[i].url);
+      pickedFiles.splice(i, 1);
+      renderThumbs();
+    }
+  });
 
   /* ---------- 结果区 ---------- */
   function setStatus(text, state) {
@@ -740,7 +816,7 @@
       setStatus('已停止', '');
       return;
     }
-    if (!pickedFile) { showError('请先选择一张图片'); return; }
+    if (!pickedFiles.length) { showError('请先选择至少一张图片'); return; }
     var questionText = $('questionText').value.trim();
     if (mode === 'question' && !questionText) { showError('请填写题干文本'); return; }
 
@@ -748,7 +824,8 @@
     form.append('mode', mode);
     form.append('questionText', questionText);
     form.append('showThinking', $('showThinking').checked ? 'true' : 'false');
-    form.append('image', pickedFile);
+    // 同名多字段：Spring 绑定为 List<MultipartFile> images，append 顺序即模型看到的图片顺序
+    pickedFiles.forEach(function (p) { form.append('images', p.file); });
 
     resetResult();
     running = true;

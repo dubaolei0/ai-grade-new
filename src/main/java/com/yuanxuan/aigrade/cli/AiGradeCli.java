@@ -24,7 +24,7 @@ import java.util.stream.Stream;
  *   to_image_url()                  ->  toImageUrl()
  *   chat(content, thinking, ...)    ->  chat()
  *   extra_body.enable_thinking      ->  请求体顶层 enable_thinking
- *   grade(image)                    ->  grade()
+ *   grade(image)                    ->  grade(String... images)
  *   __main__                        ->  main()
  * </pre>
  *
@@ -32,7 +32,9 @@ import java.util.stream.Stream;
  * <pre>
  *   javac -encoding UTF-8 -d target/cli-classes src/main/java/com/yuanxuan/aigrade/cli/AiGradeCli.java
  *   java -Ddashscope.apiKey=sk-xxx -cp target/cli-classes com.yuanxuan.aigrade.cli.AiGradeCli 学生作答题.jpg
+ *   java -Ddashscope.apiKey=sk-xxx -cp target/cli-classes com.yuanxuan.aigrade.cli.AiGradeCli 题目.jpg 答案.jpg
  * </pre>
+ * 命令行可传多个图片路径 / URL，按参数顺序合并为一份作业；不传则使用默认的 {@code 学生作答题.jpg}。
  * 也可用环境变量 DASHSCOPE_API_KEY 代替 -D；可用 -DshowThinking=false 关闭思考过程打印，
  * 用 -Ddashscope.model=xxx / -Ddashscope.baseUrl=xxx 覆盖模型与地址。
  */
@@ -94,6 +96,15 @@ public final class AiGradeCli {
             {transcript}
             """;
 
+    /** 多图补充提示：与 Prompts.MULTI_IMAGE_FULL 保持一致。 */
+    private static final String MULTI_IMAGE_HINT = """
+            补充说明：本次提供了多张图片，它们是同一份作业的不同部分（题干与学生作答可能分别在不同图片中，也可能一页拍不完）。
+            请按图片提供的先后顺序，把它们当作一份连续作业来转录：
+            - 先在全部图片中找出每道题的题干，再找出该题对应的学生作答，配对后逐题输出上述格式。
+            - 同一道题只输出一次；不要因为某张图只有题干或只有答案就漏掉该题，也不要把不同图片里的同一题重复转录。
+            - 若某题的题干与作答分散在两张图中，以题干所在图片的题号为依据合并。
+            """;
+
     private AiGradeCli() {
     }
 
@@ -103,28 +114,40 @@ public final class AiGradeCli {
         if (API_KEY == null || API_KEY.isBlank()) {
             System.err.println("未找到 API Key：请设置环境变量 DASHSCOPE_API_KEY，或用 -Ddashscope.apiKey=sk-xxx 传入。");
             System.err.println("示例：java -Ddashscope.apiKey=sk-xxx -cp target/cli-classes "
-                    + "com.yuanxuan.aigrade.cli.AiGradeCli 学生作答题.jpg");
+                    + "com.yuanxuan.aigrade.cli.AiGradeCli 题目.jpg 答案.jpg");
             return;
         }
         try {
-            grade(args.length > 0 ? args[0] : IMAGE);
+            grade(args.length > 0 ? args : new String[]{IMAGE});
         } catch (Exception e) {
             System.err.println("\n批改失败：" + e.getMessage());
         }
     }
 
-    /** 两阶段批改：先转录，再解题打分。 */
-    private static void grade(String image) throws Exception {
-        // 第一阶段：只转录不解题（thinking = false）
-        String imagePart = "{\"type\":\"image_url\",\"image_url\":{\"url\":\""
-                + escapeJson(toImageUrl(image)) + "\"}}";
-        String textPart = "{\"type\":\"text\",\"text\":\"" + escapeJson(TRANSCRIBE_PROMPT) + "\"}";
-        String transcript = chat("[" + imagePart + "," + textPart + "]",
-                false, "转录结果", SHOW_THINKING);
+    /** 两阶段批改：先转录（多张图片按参数顺序合并），再解题打分。 */
+    private static void grade(String... images) throws Exception {
+        // 第一阶段：只转录不解题（thinking = false）；多个 image_url 连续放在数组前面
+        StringBuilder content = new StringBuilder("[");
+        for (String image : images) {
+            if (content.length() > 1) {
+                content.append(',');
+            }
+            content.append("{\"type\":\"image_url\",\"image_url\":{\"url\":\"")
+                    .append(escapeJson(toImageUrl(image))).append("\"}}");
+        }
+        String prompt = TRANSCRIBE_PROMPT;
+        if (images.length > 1) {
+            prompt += MULTI_IMAGE_HINT;
+            System.out.println("已载入 " + images.length + " 张图片，按参数顺序合并转录。");
+        }
+        content.append(",{\"type\":\"text\",\"text\":\"")
+                .append(escapeJson(prompt)).append("\"}]");
+
+        String transcript = chat(content.toString(), false, "转录结果", SHOW_THINKING);
 
         // 第二阶段：基于转录文本解题并批改（thinking = true）
-        String prompt = GRADE_PROMPT.replace("{transcript}", transcript);
-        chat("\"" + escapeJson(prompt) + "\"", true, "批改结果", true);
+        String gradePrompt = GRADE_PROMPT.replace("{transcript}", transcript);
+        chat("\"" + escapeJson(gradePrompt) + "\"", true, "批改结果", true);
     }
 
     /**
