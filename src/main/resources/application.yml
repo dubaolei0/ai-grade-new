@@ -24,8 +24,8 @@ dashscope:
 
 doubao:
   # 豆包爱学（火山引擎）作业批改；也可通过环境变量 DOUBAO_API_KEY / DOUBAO_BOT_ID 覆盖
-  api-key: VxCgNvLTE.ChBQalF5QURONVVFVzhNUlBpENbUsvUHGAEqEBpnAes380GdtYLBMQJpzf8.rlxqzvLTXBZeByiAUy9dqFWCorCAAdvJ4kx190I4YJkjM2YKymoYpJrVux6To1PbLMjg7iF6jgVXNdx5Jq65zAeZ
-  bot-id: 7706799091447006756
+  api-key: VxCgNvLTE.ChBQalF5QUROux6To1PbLMjg7iF6jgVXNdx5Jq65zAeZ
+  bot-id: 77067990
   base-url: https://open.feedcoopapi.com
   service-name: ask_echo
   connect-timeout-seconds: 15
