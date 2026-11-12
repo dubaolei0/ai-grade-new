@@ -173,6 +173,11 @@
   .q-line.score { color: #4338ca; font-weight: 600; }
   .total-banner { margin-top: 14px; padding: 14px 16px; border-radius: 12px; background: linear-gradient(120deg, #4f46e5, #7c3aed); color: #fff; font-size: 16px; font-weight: 700; text-align: center; }
   .error-bar { display: none; margin: 0 22px 18px; padding: 12px 14px; border-radius: 10px; background: #fef2f2; border: 1px solid #fecaca; color: var(--bad); font-size: 13px; }
+
+  /* ---------- 豆包爱学异步批改结果 ---------- */
+  .doubao-task { padding: 4px 0; }
+  .doubao-row { font-size: 13px; padding: 4px 0; word-break: break-all; }
+  .doubao-row a { color: var(--primary); }
   footer { text-align: center; color: #9ca3af; font-size: 12px; margin-top: 22px; }
 
   /* ---------- 数学公式渲染（轻量、零依赖） ---------- */
@@ -229,7 +234,7 @@
     <span class="bar-label">模型服务商</span>
     <div class="provider-tabs">
       <button class="provider-tab active" data-provider="dashscope">阿里百炼</button>
-      <button class="provider-tab" data-provider="doubao">豆包爱学<span class="soon">暂未接入</span></button>
+      <button class="provider-tab" data-provider="doubao">豆包爱学</button>
       <button class="provider-tab" data-provider="xfyun">科大讯飞<span class="soon">暂未接入</span></button>
     </div>
   </div>
@@ -592,12 +597,17 @@
   var showRawLatex = false;     // 是否显示原始 LaTeX
   var rafId = 0;                // 流式渲染节流
 
+  /* ---------- 豆包爱学异步批改状态 ---------- */
+  var doubaoTaskId = null;      // 最近一次提交拿到的任务 id
+  var doubaoLastQuery = null;   // 最近一次查询返回的 Result，供「原始 LaTeX」切换时重渲染
+  var doubaoQueryController = null;
+
   /* 服务商扩展点：目前只有阿里百炼接了后端（GradeService / DashScopeClient）。
      接入新服务商时把 ready 改为 true，并在提交处按 provider 选择对应后端接口即可。 */
   var PROVIDERS = {
-    dashscope: { name: '阿里百炼', ready: true },
-    doubao:    { name: '豆包爱学', ready: false },
-    xfyun:     { name: '科大讯飞', ready: false }
+    dashscope: { name: '阿里百炼', ready: true, mode: 'sse' },
+    doubao:    { name: '豆包爱学', ready: true, mode: 'async' },
+    xfyun:     { name: '科大讯飞', ready: false, mode: 'sse' }
   };
   var activeProvider = 'dashscope';
 
@@ -613,6 +623,7 @@
 
   var submitBtn = $('submitBtn'), clearBtn = $('clearBtn');
   var streamText = $('streamText'), cards = $('cards'), placeholder = $('placeholder');
+  var resultMain = $('resultMain');
   var transcriptText = $('transcriptText'), thinkingText = $('thinkingText');
   var thinkingBlock = $('thinkingBlock'), errorBar = $('errorBar');
 
@@ -651,6 +662,7 @@
       btn.classList.add('active');
       activeProvider = btn.getAttribute('data-provider');
       errorBar.style.display = 'none';
+      clearDoubao();
       applyProvider();
     });
   });
@@ -761,6 +773,7 @@
     transcriptRaw = '';
     thinkingRaw = '';
     if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    clearDoubao();
     streamText.textContent = '';
     streamText.style.display = 'block';
     streamText.innerHTML = '<span class="caret"></span>';
@@ -777,6 +790,7 @@
     contentRaw = '';
     transcriptRaw = '';
     thinkingRaw = '';
+    clearDoubao();
     streamText.style.display = 'none';
     streamText.textContent = '';
     cards.style.display = 'none';
@@ -842,7 +856,201 @@
   $('rawLatex').addEventListener('change', function () {
     showRawLatex = this.checked;
     paintAll();
+    if (doubaoLastQuery) renderDoubaoQuery(doubaoLastQuery);
   });
+
+  /* ---------- 豆包爱学：提交 + 手动查询（同步 JSON，非流式） ---------- */
+  /* 题目类型 / 学科 / 学段 枚举（来自接口文档） */
+  var DOUBAO_QTYPE = {0:'未知',1:'选择题',2:'填空题',3:'判断题',4:'解答题',5:'计算题',6:'口算题',
+    7:'竖式计算题',8:'脱式计算题',9:'代数式化简题',10:'解方程/解不等式',11:'解方程组/解不等式组',12:'其他'};
+  var DOUBAO_SUBJECT = {0:'未知',1:'语文',2:'数学',3:'英语',4:'物理',5:'化学',6:'历史',7:'地理',8:'生物',9:'政治'};
+  var DOUBAO_DEPT = {0:'未知',1:'小学',2:'初中',3:'高中',4:'大学',6:'非K12'};
+
+  function clearDoubao() {
+    if (doubaoQueryController) { try { doubaoQueryController.abort(); } catch (e) {} doubaoQueryController = null; }
+    doubaoTaskId = null;
+    doubaoLastQuery = null;
+    var wrap = $('doubaoWrap');
+    if (wrap) wrap.remove();
+  }
+
+  /* 清空结果主区里的百炼展示元素，给豆包结果腾出位置 */
+  function prepareDoubaoArea() {
+    placeholder.style.display = 'none';
+    streamText.style.display = 'none';
+    cards.style.display = 'none';
+    var old = $('doubaoWrap');
+    if (old) old.remove();
+  }
+
+  function submitDoubao(form) {
+    try { resetResult(); } catch (e) { console.warn('结果区初始化异常（不影响批改请求）：', e); }
+    running = true;
+    controller = new AbortController();
+    submitBtn.textContent = '⏹ 停止';
+    submitBtn.classList.add('stop');
+    setStatus('正在提交豆包批改任务…', 'run');
+
+    prepareDoubaoArea();
+    var wrap = document.createElement('div');
+    wrap.id = 'doubaoWrap';
+    wrap.innerHTML = '<div class="placeholder"><span class="big">⏳</span>正在提交任务，请稍候…</div>';
+    resultMain.appendChild(wrap);
+
+    fetch(API + '/api/doubao/grade/submit', { method: 'POST', body: form, signal: controller.signal })
+      .then(function (response) {
+        return response.json().then(function (data) { return { ok: response.ok, data: data }; });
+      })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.data.message || ('HTTP ' + res));
+        var data = res.data;
+        if (!data || !data.task_id) throw new Error('未返回 task_id：' + JSON.stringify(data).slice(0, 200));
+        doubaoTaskId = data.task_id;
+        doubaoLastQuery = null;
+        renderDoubaoSubmit(data);
+        setStatus('任务已提交，点「查询批改结果」获取结果', 'ok');
+      })
+      .catch(function (err) {
+        if (err.name === 'AbortError') {
+          var w = $('doubaoWrap');
+          if (w) w.innerHTML = '<div class="placeholder">已停止提交。</div>';
+          setStatus('已停止', '');
+        } else {
+          showError('提交失败：' + err.message);
+          setStatus('提交失败', 'bad');
+        }
+      })
+      .finally(function () { finish(); });
+  }
+
+  function renderDoubaoSubmit(data) {
+    prepareDoubaoArea();
+    var marks = data.mark_results || [];
+    var html = '<div class="doubao-task">' +
+      '<div class="doubao-row"><span class="slot-tag">task_id</span> ' + esc(data.task_id || '') + '</div>' +
+      '<div class="doubao-row">预处理矫正图：' +
+        (data.preprocessed_image_url ? '<a href="' + esc(data.preprocessed_image_url) + '" target="_blank" rel="noopener">查看</a>' : '—') +
+      '</div>' +
+      '<div class="doubao-row">初始切题数：' + marks.length + '（提交时题目尚未批改完成）</div>' +
+      '<button class="submit" id="doubaoQueryBtn" style="margin-top:14px">查询批改结果</button>' +
+      '<div id="doubaoResult"></div>' +
+      '</div>';
+    var wrap = document.createElement('div');
+    wrap.id = 'doubaoWrap';
+    wrap.innerHTML = html;
+    resultMain.appendChild(wrap);
+    $('doubaoQueryBtn').addEventListener('click', queryDoubao);
+  }
+
+  function queryDoubao() {
+    if (!doubaoTaskId) return;
+    var btn = $('doubaoQueryBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '查询中…'; }
+    var box = $('doubaoResult');
+    if (box) box.innerHTML = '<div class="placeholder"><span class="big">⏳</span>正在查询，请稍候…</div>';
+    setStatus('正在查询批改结果…', 'run');
+    if (doubaoQueryController) { try { doubaoQueryController.abort(); } catch (e) {} }
+    doubaoQueryController = new AbortController();
+
+    fetch(API + '/api/doubao/grade/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId: doubaoTaskId }),
+      signal: doubaoQueryController.signal
+    })
+      .then(function (response) {
+        return response.json().then(function (data) { return { ok: response.ok, data: data }; });
+      })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.data.message || '查询失败');
+        doubaoLastQuery = res.data;
+        renderDoubaoQuery(res.data);
+        var st = res.data.status;
+        if (st === 'running') setStatus('处理中，可稍后再次查询', 'run');
+        else if (st === 'success') setStatus('批改完成', 'ok');
+        else if (st === 'failed') setStatus('批改失败', 'bad');
+        else setStatus('已返回结果', 'ok');
+      })
+      .catch(function (err) {
+        if (err.name === 'AbortError') { setStatus('已停止查询', ''); }
+        else { showError('查询失败：' + err.message); setStatus('查询失败', 'bad'); }
+      })
+      .finally(function () {
+        if (btn) { btn.disabled = false; btn.textContent = '查询批改结果'; }
+        doubaoQueryController = null;
+      });
+  }
+
+  function renderDoubaoQuery(data) {
+    var box = $('doubaoResult');
+    if (!box) return;
+    var marks = data.mark_results || [];
+    var st = data.status;
+    var html = '';
+
+    // 顶部状态条
+    var bannerBg = st === 'success' ? 'linear-gradient(120deg,#16a34a,#22c55e)'
+      : st === 'failed' ? 'linear-gradient(120deg,#dc2626,#f97316)'
+      : 'linear-gradient(120deg,#4f46e5,#7c3aed)';
+    html += '<div class="total-banner" style="background:' + bannerBg + '">状态：' + esc(st || '');
+    var meta = [];
+    if (data.subject_type != null) meta.push(DOUBAO_SUBJECT[data.subject_type] || ('学科' + data.subject_type));
+    if (data.department_type != null) meta.push(DOUBAO_DEPT[data.department_type] || ('学段' + data.department_type));
+    if (data.usage && data.usage.total_tokens != null) meta.push('tokens ' + data.usage.total_tokens);
+    if (meta.length) html += ' · ' + esc(meta.join(' / '));
+    html += '</div>';
+
+    if (st === 'running' && !marks.length) {
+      html += '<div class="placeholder">任务仍在处理中，请等待几秒后再次点击「查询批改结果」。</div>';
+      box.innerHTML = html;
+      return;
+    }
+    if (!marks.length) {
+      html += '<div class="placeholder">未识别到题目。</div>';
+      box.innerHTML = html;
+      return;
+    }
+
+    for (var i = 0; i < marks.length; i++) {
+      var m = marks[i] || {};
+      if (m.finish === false) {
+        html += '<div class="q-card"><div class="q-title">第 ' + (i + 1) + ' 题（处理中）</div>' +
+          '<div class="q-line warn">该题尚未处理完成，请稍后再次查询。</div></div>';
+        continue;
+      }
+      var qtype = DOUBAO_QTYPE[m.question_type] || '未知';
+      var ars = m.answer_results || [];
+      var badge;
+      if (!ars.length) {
+        badge = '<span class="q-line warn">无手写答案</span>';
+      } else {
+        var anyOk = false, anyBad = false;
+        ars.forEach(function (a) { if (a.correct) anyOk = true; else anyBad = true; });
+        badge = (anyOk && !anyBad) ? '✅ 正确' : (anyBad && !anyOk) ? '❌ 错误' : '⚠️ 部分正确';
+      }
+
+      html += '<div class="q-card">';
+      html += '<div class="q-title">第 ' + (i + 1) + ' 题' +
+        ' <span class="slot-tag" style="margin-left:6px">' + esc(qtype) + '</span>' +
+        ' <span style="margin-left:6px;font-size:13px">' + badge + '</span></div>';
+
+      var ocr = m.ocr_result || {};
+      if (ocr.page_text) {
+        html += '<div class="q-line"><b>题干 OCR：</b></div>' +
+          '<div class="q-line">' + renderMathText(ocr.page_text, showRawLatex) + '</div>';
+      }
+      var handed = (ocr.handed_lines || []).map(function (l) { return l.line_text; }).filter(Boolean);
+      if (handed.length) {
+        html += '<div class="q-line"><b>学生答案：</b>' + renderMathText(handed.join('；'), showRawLatex) + '</div>';
+      }
+      if (m.solution) {
+        html += '<details class="block" open><summary>解析</summary>' +
+          '<div class="block-content">' + renderMathText(m.solution, showRawLatex) + '</div></details>';
+      }
+      html += '</div>';
+    }
+    box.innerHTML = html;
+  }
 
   /* ---------- SSE 事件处理 ---------- */
   function handleEvent(evt) {
@@ -903,6 +1111,14 @@
       showError('请上传：' + missing.map(function (role) {
         return SLOT_META[role].label;
       }).join('、') + '（两个分区各 1 张）');
+      return;
+    }
+
+    // 豆包爱学：异步提交 + 手动查询，走独立接口，不复用百炼的 SSE 流
+    if (activeProvider === 'doubao') {
+      var doubaoForm = new FormData();
+      SLOT_ORDER.forEach(function (role) { doubaoForm.append('images', slots[role].file); });
+      submitDoubao(doubaoForm);
       return;
     }
 

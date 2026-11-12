@@ -15,11 +15,19 @@ spring:
 
 dashscope:
   # 优先读环境变量 DASHSCOPE_API_KEY；也可在此直接填写（不建议提交到仓库）
-  api-key: sk-sp-H.HDLMEH.3OIt.MEYCIQDoWVUR9U298pyk0kvIcPGbVC5NqlJxDcmOBS-48mkS8wIhAImB2a0da96
+  api-key: sk-sp-H.DEPRPX.sNVN.MEUCIQCOMi4rZp1vU32r6_Vs6_cwX8
   base-url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
   model: qwen3.8-max
   # 前端「显示思考过程」开关的默认值
   show-thinking: true
+  connect-timeout-seconds: 15
+
+doubao:
+  # 豆包爱学（火山引擎）作业批改；也可通过环境变量 DOUBAO_API_KEY / DOUBAO_BOT_ID 覆盖
+  api-key: VxCgNvLTE.ChBQalF5QURONVVFVzhNUlBpENbUsvUHGAEqEBpnAes380GdtYLBMQJpzf8.rlxqzvLTXBZeByiAUy9dqFWCorCAAdvJ4kx190I4YJkjM2YKymoYpJrVux6To1PbLMjg7iF6jgVXNdx5Jq65zAeZ
+  bot-id: 7706799091447006756
+  base-url: https://open.feedcoopapi.com
+  service-name: ask_echo
   connect-timeout-seconds: 15
 
 logging:
