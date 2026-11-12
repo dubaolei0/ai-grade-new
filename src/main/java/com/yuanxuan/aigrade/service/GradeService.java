@@ -1,8 +1,12 @@
 package com.yuanxuan.aigrade.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yuanxuan.aigrade.model.GradeInput;
+import com.yuanxuan.aigrade.service.DashScopeClient.ChatResult;
 import com.yuanxuan.aigrade.support.Prompts;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -25,6 +29,8 @@ import java.util.Map;
  */
 @Service
 public class GradeService {
+
+    private static final Logger log = LoggerFactory.getLogger(GradeService.class);
 
     private final DashScopeClient client;
     private final ObjectMapper mapper;
@@ -59,20 +65,21 @@ public class GradeService {
             textPart.put("text", transcribePrompt);
             content.add(textPart);
 
-            String stage1Text = client.chatStream(content, false, (reasoning, text) -> {
+            ChatResult stage1 = client.chatStream(content, false, (reasoning, text) -> {
                 if (text != null && !text.isEmpty()) {
                     sendDelta(emitter, "transcript", text);
                 }
             });
 
-            String transcript = stage1Text == null ? "" : stage1Text.trim();
+            String transcript = stage1.content() == null ? "" : stage1.content().trim();
             emit(emitter, "transcript", Map.of("text", transcript));
+            logStageUsage("阶段一 · 作业转录", stage1.usage());
 
             // ---------- 阶段二：基于转录文本独立解题并批改，开启思考 ----------
             emit(emitter, "stage", Map.of("stage", "grade", "label", "阶段二 · 解题与批改"));
             String gradePrompt = Prompts.GRADE.replace("{transcript}", transcript);
 
-            client.chatStream(gradePrompt, true, (reasoning, text) -> {
+            ChatResult stage2 = client.chatStream(gradePrompt, true, (reasoning, text) -> {
                 if (reasoning != null && !reasoning.isEmpty() && input.showThinking()) {
                     sendDelta(emitter, "reasoning", reasoning);
                 }
@@ -80,6 +87,8 @@ public class GradeService {
                     sendDelta(emitter, "content", text);
                 }
             });
+            logStageUsage("阶段二 · 解题与批改", stage2.usage());
+            logTotalUsage(stage1.usage(), stage2.usage());
 
             emit(emitter, "done", Map.of("ok", true));
             emitter.complete();
@@ -112,6 +121,36 @@ public class GradeService {
         // 用 UTF-8 字节写出，避免 StringHttpMessageConverter 默认 ISO-8859-1 导致中文乱码
         byte[] bytes = mapper.writeValueAsString(event).getBytes(StandardCharsets.UTF_8);
         emitter.send(SseEmitter.event().name("message").data(bytes, MediaType.APPLICATION_JSON));
+    }
+
+    /** 打印单阶段 token 用量：prompt / completion / total，缺字段时容错。 */
+    private void logStageUsage(String stage, JsonNode usage) {
+        if (usage == null || usage.isMissingNode() || usage.isNull()) {
+            log.info("{} 未返回 token 用量", stage);
+            return;
+        }
+        log.info("{} token 用量：prompt_tokens={}, completion_tokens={}, total_tokens={}",
+                stage,
+                usage.path("prompt_tokens").asText("?"),
+                usage.path("completion_tokens").asText("?"),
+                usage.path("total_tokens").asText("?"));
+    }
+
+    /** 汇总两阶段用量并打印总计（字段缺失时跳过对应汇总）。 */
+    private void logTotalUsage(JsonNode stage1, JsonNode stage2) {
+        long prompt = sumToken(stage1, "prompt_tokens") + sumToken(stage2, "prompt_tokens");
+        long completion = sumToken(stage1, "completion_tokens") + sumToken(stage2, "completion_tokens");
+        long total = sumToken(stage1, "total_tokens") + sumToken(stage2, "total_tokens");
+        log.info("本次批改 token 用量汇总：prompt_tokens={}, completion_tokens={}, total_tokens={}",
+                prompt, completion, total);
+    }
+
+    private long sumToken(JsonNode usage, String field) {
+        if (usage == null || usage.isMissingNode() || usage.isNull()) {
+            return 0L;
+        }
+        JsonNode node = usage.get(field);
+        return node == null || !node.canConvertToLong() ? 0L : node.asLong();
     }
 
     private String friendlyMessage(Exception e) {

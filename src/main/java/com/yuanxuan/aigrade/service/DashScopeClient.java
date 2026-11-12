@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yuanxuan.aigrade.config.DashScopeProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.UncheckedIOException;
@@ -32,6 +34,8 @@ import java.util.stream.Stream;
 @Component
 public class DashScopeClient {
 
+    private static final Logger log = LoggerFactory.getLogger(DashScopeClient.class);
+
     private final DashScopeProperties props;
     private final ObjectMapper mapper;
     private final HttpClient httpClient;
@@ -49,19 +53,24 @@ public class DashScopeClient {
         void onDelta(String reasoningChunk, String contentChunk);
     }
 
+    /** 一次流式对话的结果：拼接后的完整正文 + 最后一个 chunk 携带的 token 用量（可能为 null）。 */
+    public record ChatResult(String content, JsonNode usage) {}
+
     /**
      * 发起一次流式对话。
      *
      * @param content        消息内容：纯文本字符串，或多模态 List&lt;Map&gt; 数组
      * @param enableThinking 是否开启思考（阶段一 false，阶段二 true）
      * @param handler        增量回调
-     * @return 拼接后的完整正文
+     * @return 拼接后的完整正文与 token 用量
      */
-    public String chatStream(Object content, boolean enableThinking, DeltaHandler handler) throws Exception {
+    public ChatResult chatStream(Object content, boolean enableThinking, DeltaHandler handler) throws Exception {
         ObjectNode root = mapper.createObjectNode();
         root.put("model", props.getModel());
         root.put("stream", true);
         root.put("enable_thinking", enableThinking);
+        // 要求服务端在流式响应的最后一个 chunk 里回推 usage（token 用量），否则默认拿不到。
+        root.putObject("stream_options").put("include_usage", true);
 
         ArrayNode messages = root.putArray("messages");
         ObjectNode userMessage = messages.addObject();
@@ -93,6 +102,8 @@ public class DashScopeClient {
         }
 
         StringBuilder answer = new StringBuilder();
+        // usage 一般只出现在最后一个 chunk（[DONE] 前一格），用 holder 在 lambda 里累积最后一个非空值。
+        JsonNode[] usageHolder = new JsonNode[1];
         try (Stream<String> lines = response.body()) {
             lines.forEach(line -> {
                 if (line == null || !line.startsWith("data:")) {
@@ -107,6 +118,11 @@ public class DashScopeClient {
                     chunk = mapper.readTree(data);
                 } catch (Exception parseError) {
                     return; // 忽略心跳、注释等无法解析的行
+                }
+                // usage 与 choices 同级，最后一个 chunk 才会带；有就覆盖，保留最后一次。
+                JsonNode usage = chunk.path("usage");
+                if (usage.isObject()) {
+                    usageHolder[0] = usage;
                 }
                 JsonNode choices = chunk.path("choices");
                 if (!choices.isArray() || choices.isEmpty()) {
@@ -128,7 +144,10 @@ public class DashScopeClient {
         } catch (UncheckedIOException e) {
             throw new IllegalStateException("读取模型流式响应时连接中断：" + e.getMessage(), e);
         }
-        return answer.toString();
+        JsonNode usage = usageHolder[0];
+        log.info("模型流式调用 token 用量：model={}, enable_thinking={}, usage={}",
+                props.getModel(), enableThinking, usage);
+        return new ChatResult(answer.toString(), usage);
     }
 
     private static String trimTrailingSlash(String url) {
