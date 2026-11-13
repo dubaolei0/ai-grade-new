@@ -70,6 +70,61 @@ public class FlyingSaucerUtil {
     }
 
     /**
+     * 两张图片横向（左右）合并为一张 JPEG：各自等比缩放到固定高度（800），自左而右并排到白底画布后编码输出。
+     * 不经过 HTML 渲染——上传的图片字节没有可被 flying-saucer 通过 URL 拉取的地址，直接解码拼接最稳妥；
+     * 输出与 {@link #genImage(String)} 一致（白底、JPEG 质量 0.8）。
+     *
+     * @param leftBytes  左侧图片字节，不能为空
+     * @param rightBytes 右侧图片字节，不能为空
+     * @return 合并后的 JPEG 字节
+     */
+    public static byte[] mergeHorizontal(byte[] leftBytes, byte[] rightBytes) {
+        return mergeHorizontal(List.of(leftBytes, rightBytes));
+    }
+
+    /**
+     * 多张图片横向（左右）合并为一张 JPEG：各自等比缩放到固定高度（800），按列表顺序自左而右并排到白底画布后编码输出。
+     * 适用单图、双图或多图场景；单图时等比缩放后原样输出，多图时横向并排。
+     * 不经过 HTML 渲染——上传的图片字节没有可被 flying-saucer 通过 URL 拉取的地址，直接解码拼接最稳妥；
+     * 输出与 {@link #genImage(String)} 一致（白底、JPEG 质量 0.8）。
+     *
+     * @param images 图片字节列表（自左而右顺序），不能为空
+     * @return 合并后的 JPEG 字节
+     */
+    public static byte[] mergeHorizontal(List<byte[]> images) {
+        if (images == null || images.isEmpty()) {
+            throw new IllegalArgumentException("mergeHorizontal: 图片列表不能为空");
+        }
+        List<BufferedImage> scaled = new ArrayList<>(images.size());
+        int totalWidth = 0;
+        // 左右合并：统一缩放到固定高度（复用 800 基准），宽度按宽高比自适应，画布高度恒为 IMAGE_WIDTH
+        int targetHeight = IMAGE_WIDTH;
+        for (byte[] bytes : images) {
+            // 先裁掉四周空白边再缩放，避免作答图等大片留白被原样堆进合并图
+            BufferedImage img = scaleToHeight(trimWhitespace(readImage(bytes)), targetHeight);
+            scaled.add(img);
+            totalWidth += img.getWidth();
+        }
+        int width = Math.max(1, totalWidth);
+        int height = targetHeight;
+        // JPEG 无 alpha 通道，铺白底避免透明区变黑
+        BufferedImage canvas = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = canvas.createGraphics();
+        try {
+            g.setColor(Color.WHITE);
+            g.fillRect(0, 0, width, height);
+            int x = 0;
+            for (BufferedImage img : scaled) {
+                g.drawImage(img, x, 0, null);
+                x += img.getWidth();
+            }
+        } finally {
+            g.dispose();
+        }
+        return toJpeg(canvas);
+    }
+
+    /**
      * 两张图片纵向（上下）合并为一张 JPEG：各自等比缩放到默认画布宽度（800），自上而下堆叠到白底画布后编码输出。
      * 不经过 HTML 渲染——上传的图片字节没有可被 flying-saucer 通过 URL 拉取的地址，直接解码拼接最稳妥；
      * 输出与 {@link #genImage(String)} 一致（800 宽、白底、JPEG 质量 0.8）。
@@ -97,13 +152,16 @@ public class FlyingSaucerUtil {
         }
         List<BufferedImage> scaled = new ArrayList<>(images.size());
         int totalHeight = 0;
+        // 上下合并：统一缩放到固定宽度（800 基准），高度按宽高比自适应，画布宽度恒为 IMAGE_WIDTH
+        int targetWidth = IMAGE_WIDTH;
         for (byte[] bytes : images) {
-            BufferedImage img = scaleToWidth(readImage(bytes), IMAGE_WIDTH);
+            // 先裁掉四周空白边再缩放，避免作答图等大片留白被原样堆进合并图
+            BufferedImage img = scaleToWidth(trimWhitespace(readImage(bytes)), targetWidth);
             scaled.add(img);
             totalHeight += img.getHeight();
         }
-        int width = IMAGE_WIDTH;
-        int height = totalHeight;
+        int width = targetWidth;
+        int height = Math.max(1, totalHeight);
         // JPEG 无 alpha 通道，铺白底避免透明区变黑
         BufferedImage canvas = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = canvas.createGraphics();
@@ -174,6 +232,21 @@ public class FlyingSaucerUtil {
         File file = base64ToFile(base64, "/tmp/test.jpg");
         System.out.println(file.getAbsolutePath());    }
 
+    /**
+     * 读取图片像素宽高，供调用方做尺寸/像素数校验（如豆包要求 宽×高 ∈ [196, 36000000]）。
+     * 格式不支持或已损坏时抛 IllegalArgumentException。
+     *
+     * @param imageBytes 图片字节，不能为空
+     * @return {@code int[]{width, height}}
+     */
+    public static int[] dimensions(byte[] imageBytes) {
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new IllegalArgumentException("dimensions: 图片字节不能为空");
+        }
+        BufferedImage img = readImage(imageBytes);
+        return new int[]{ img.getWidth(), img.getHeight() };
+    }
+
     /** 解码图片字节；格式不支持或已损坏时抛 IllegalArgumentException。 */
     private static BufferedImage readImage(byte[] bytes) {
         try (ByteArrayInputStream in = new ByteArrayInputStream(bytes)) {
@@ -185,6 +258,85 @@ public class FlyingSaucerUtil {
         } catch (IOException e) {
             throw new UncheckedIOException("FlyingSaucerUtil:readImage:读取失败", e);
         }
+    }
+
+    /**
+     * 裁掉图片四周的空白边（近似白底），只保留内容区域。
+     * 拍摄的作业图常带大片留白，纵向合并前不裁掉会让合并图出现明显空白间隙。
+     * 判定阈值：像素任一 RGB 通道低于 245 即视为内容（非近白）；整图空白时原样返回。
+     *
+     * @param src 原图
+     * @return 裁剪后的子图；整图空白或无法判定时返回原图
+     */
+    private static BufferedImage trimWhitespace(BufferedImage src) {
+        int w = src.getWidth();
+        int h = src.getHeight();
+        // 带透明通道或其他类型的图先铺白底转成 RGB，避免 alpha 干扰「近白」判定
+        BufferedImage rgb = src.getType() == BufferedImage.TYPE_INT_RGB ? src : toRgbWhiteBg(src);
+        final int threshold = 245;
+        int top = -1, bottom = -1, left = w, right = -1;
+        // 按行批量取像素，比逐像素 getRGB 快得多，作业大图也能很快扫完
+        for (int y = 0; y < h; y++) {
+            // BufferedImage 没有 5 参数 getRGB，批量取一行像素要用 7 参数版本：
+            // (startX, startY, w, h, rgbArray, offset, scansize)
+            int[] row = rgb.getRGB(0, y, w, 1, null, 0, w);
+            int rowLeft = w, rowRight = -1;
+            for (int x = 0; x < w; x++) {
+                int argb = row[x];
+                int r = (argb >> 16) & 0xff;
+                int g = (argb >> 8) & 0xff;
+                int b = argb & 0xff;
+                if (r < threshold || g < threshold || b < threshold) {
+                    if (x < rowLeft) rowLeft = x;
+                    if (x > rowRight) rowRight = x;
+                }
+            }
+            if (rowRight >= 0) { // 本行有内容
+                if (top < 0) top = y;
+                bottom = y;
+                if (rowLeft < left) left = rowLeft;
+                if (rowRight > right) right = rowRight;
+            }
+        }
+        if (top < 0) {
+            // 整图空白，没有可裁的内容，原样返回
+            return src;
+        }
+        return rgb.getSubimage(left, top, right - left + 1, bottom - top + 1);
+    }
+
+    /** 把任意类型的图片铺白底后转成 TYPE_INT_RGB，消除透明通道对空白判定的影响。 */
+    private static BufferedImage toRgbWhiteBg(BufferedImage src) {
+        BufferedImage dst = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = dst.createGraphics();
+        try {
+            g.setColor(Color.WHITE);
+            g.fillRect(0, 0, dst.getWidth(), dst.getHeight());
+            g.drawImage(src, 0, 0, null);
+        } finally {
+            g.dispose();
+        }
+        return dst;
+    }
+
+    /** 等比缩放到指定高度，保持宽高比；高度已相等时原样返回。 */
+    private static BufferedImage scaleToHeight(BufferedImage src, int targetHeight) {
+        if (src.getHeight() == targetHeight) {
+            return src;
+        }
+        int targetWidth = Math.max(1,
+                (int) Math.round((double) src.getWidth() * targetHeight / src.getHeight()));
+        BufferedImage dst = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = dst.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.setColor(Color.WHITE);
+            g.fillRect(0, 0, targetWidth, targetHeight);
+            g.drawImage(src, 0, 0, targetWidth, targetHeight, null);
+        } finally {
+            g.dispose();
+        }
+        return dst;
     }
 
     /** 等比缩放到指定宽度，保持宽高比；宽度已相等时原样返回。 */

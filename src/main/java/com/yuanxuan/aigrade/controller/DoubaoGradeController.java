@@ -45,6 +45,9 @@ public class DoubaoGradeController {
 
     private static final int MAX_IMAGES = 8;
     private static final long MAX_FILE_BYTES = 20L * 1024 * 1024;
+    /** 豆包对提交图片的像素数（宽×高）限制范围。 */
+    private static final long MIN_PIXELS = 196L;
+    private static final long MAX_PIXELS = 36_000_000L;
 
     private final DoubaoClient client;
     private final DoubaoProperties props;
@@ -99,13 +102,20 @@ public class DoubaoGradeController {
             }
         }
 
-        // 上传的多张图片字节按顺序纵向拼接成单图（FlyingSaucerUtil.mergeVertical），
+        // 上传的多张图片字节按顺序纵向（上下）拼接成单图（FlyingSaucerUtil.mergeVertical），
         // 再编码成 data URL 提交给豆包——豆包 submit 接口只接收单张图片。
         List<byte[]> imageBytes = new ArrayList<>(files.size());
         for (MultipartFile f : files) {
             imageBytes.add(f.getBytes());
         }
         byte[] merged = FlyingSaucerUtil.mergeVertical(imageBytes);
+        // 豆包要求提交图片的 宽×高 像素数落在 [196, 36000000] 内，拼接后立即校验，命中直接 400 提示前端
+        int[] dim = FlyingSaucerUtil.dimensions(merged);
+        long pixels = (long) dim[0] * dim[1];
+        if (pixels < MIN_PIXELS || pixels > MAX_PIXELS) {
+            throw new IllegalStateException("图片像素数（宽×高）需在 [" + MIN_PIXELS + ", " + MAX_PIXELS
+                    + "] 之间，当前为 " + dim[0] + "×" + dim[1] + " = " + pixels + "，请调整图片后重试");
+        }
         String dataUrl = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(merged);
 
         log.info("豆包提交任务请求：bot_id={}, 图片数={}, 拼接后 base64 长度={}",

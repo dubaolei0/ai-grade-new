@@ -67,8 +67,8 @@ public class QuestionJudgingService {
     /**
      * 上传两张图片，纵向合并为一张 JPEG。两图各自等比缩放到 800 宽后上下堆叠，白底输出。
      *
-     * @param first  第一张（上方）图片，不能为空
-     * @param second 第二张（下方）图片，不能为空
+     * @param first  第一张（左侧）图片，不能为空
+     * @param second 第二张（右侧）图片，不能为空
      * @return 合并后的 JPEG 字节
      */
     public byte[] mergeImages(MultipartFile first, MultipartFile second) {
@@ -77,7 +77,7 @@ public class QuestionJudgingService {
         }
         byte[] merged;
         try {
-            merged = FlyingSaucerUtil.mergeVertical(first.getBytes(), second.getBytes());
+            merged = FlyingSaucerUtil.mergeHorizontal(first.getBytes(), second.getBytes());
         } catch (IOException | UncheckedIOException | IllegalArgumentException e) {
             throw new IllegalArgumentException("合并图片失败：" + e.getMessage());
         }
@@ -110,10 +110,10 @@ public class QuestionJudgingService {
         save(service.gen(stem, List.of(), null, null), "target/question-judging-stem-only.jpg");
         save(service.gen(null, answers, null, null), "target/question-judging-answer-only.jpg");
         save(service.gen(null, null, explain, standardAnswer), "target/question-judging-explain-only.jpg");
-        // 两张图片纵向合并自测：复用上面两张答案图，拉取字节后合并
-        byte[] topBytes = new URL(answers.get(0)).openStream().readAllBytes();
-        byte[] bottomBytes = new URL(answers.get(1)).openStream().readAllBytes();
-        save(FlyingSaucerUtil.mergeVertical(topBytes, bottomBytes), "target/merged-vertical.jpg");
+        // 两张图片横向合并自测：复用上面两张答案图，拉取字节后合并
+        byte[] leftBytes = new URL(answers.get(0)).openStream().readAllBytes();
+        byte[] rightBytes = new URL(answers.get(1)).openStream().readAllBytes();
+        save(FlyingSaucerUtil.mergeHorizontal(leftBytes, rightBytes), "target/merged-horizontal.jpg");
     }
 
     private static void save(byte[] imageBytes, String path) throws Exception {
