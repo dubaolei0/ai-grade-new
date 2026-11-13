@@ -79,7 +79,7 @@ public class GradeService {
             emit(emitter, "stage", Map.of("stage", "grade", "label", "阶段二 · 解题与批改"));
             String gradePrompt = Prompts.GRADE.replace("{transcript}", transcript);
 
-            ChatResult stage2 = client.chatStream(gradePrompt, true, (reasoning, text) -> {
+            ChatResult stage2 = client.chatStream(gradePrompt, input.enableThinking(), (reasoning, text) -> {
                 if (reasoning != null && !reasoning.isEmpty() && input.showThinking()) {
                     sendDelta(emitter, "reasoning", reasoning);
                 }

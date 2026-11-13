@@ -57,6 +57,7 @@ public class GradeController {
     @PostMapping(value = "/grade/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter gradeStream(
             @RequestParam(value = "showThinking", defaultValue = "true") boolean showThinking,
+            @RequestParam(value = "enableThinking", defaultValue = "true") boolean enableThinking,
             @RequestParam(value = "images", required = false) List<MultipartFile> images,
             @RequestParam(value = "image", required = false) MultipartFile image) {
 
@@ -110,7 +111,7 @@ public class GradeController {
             return emitter;
         }
 
-        GradeInput input = new GradeInput(dataUrls, showThinking);
+        GradeInput input = new GradeInput(dataUrls, showThinking, enableThinking);
         CompletableFuture.runAsync(() -> gradeService.grade(input, emitter));
         return emitter;
     }

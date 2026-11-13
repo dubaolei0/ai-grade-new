@@ -299,7 +299,11 @@
           </div>
         </div>
 
-        <div class="options">
+        <div class="options" id="enableThinkingRow">
+          <span>开启模型思考</span>
+          <label class="switch"><input type="checkbox" id="enableThinking" checked><span class="slider"></span></label>
+        </div>
+        <div class="options" id="showThinkingRow">
           <span>显示模型思考过程</span>
           <label class="switch"><input type="checkbox" id="showThinking" checked><span class="slider"></span></label>
         </div>
@@ -641,6 +645,10 @@
   function applyProvider() {
     var p = PROVIDERS[activeProvider] || PROVIDERS.dashscope;
     var note = $('providerNote');
+    /* 「开启思考 / 显示思考」只对阿里百炼（DashScope SSE 流）有意义，切到其他服务商时隐藏。 */
+    var isDashscope = activeProvider === 'dashscope';
+    $('enableThinkingRow').style.display = isDashscope ? 'flex' : 'none';
+    syncShowThinkingRow();
     if (running) { submitBtn.disabled = false; return; }
     if (p.ready) {
       note.style.display = 'none';
@@ -653,6 +661,12 @@
       submitBtn.textContent = '该服务商暂未接入';
     }
   }
+  /* 「显示思考过程」仅在「开启思考」打开且当前为阿里百炼时才有意义；否则隐藏，避免无思考时仍勾选。 */
+  function syncShowThinkingRow() {
+    var show = activeProvider === 'dashscope' && $('enableThinking').checked;
+    $('showThinkingRow').style.display = show ? 'flex' : 'none';
+  }
+  $('enableThinking').addEventListener('change', syncShowThinkingRow);
   document.querySelectorAll('.provider-tab').forEach(function (btn) {
     btn.addEventListener('click', function () {
       if (running) { showError('批改进行中，请先停止再切换服务商'); return; }
@@ -780,7 +794,7 @@
     placeholder.style.display = 'none';
     transcriptText.textContent = '（转录中…）';
     thinkingText.textContent = '（暂无）';
-    thinkingBlock.style.display = $('showThinking').checked ? 'block' : 'none';
+    thinkingBlock.style.display = ($('enableThinking').checked && $('showThinking').checked) ? 'block' : 'none';
     setStage('transcribe');
   }
   clearBtn.addEventListener('click', function () {
@@ -1124,6 +1138,7 @@
 
     var form = new FormData();
     form.append('showThinking', $('showThinking').checked ? 'true' : 'false');
+    form.append('enableThinking', $('enableThinking').checked ? 'true' : 'false');
     // 固定按「真题 → 学生作答」写同名 images 字段：Spring 绑定为 List<MultipartFile>，
     // 后端按此顺序生成 image_url part，并追加多图合并转录说明让模型跨图逐题配对。
     SLOT_ORDER.forEach(function (role) { form.append('images', slots[role].file); });
