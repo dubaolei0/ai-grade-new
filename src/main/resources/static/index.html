@@ -234,7 +234,7 @@
     <span class="bar-label">模型服务商</span>
     <div class="provider-tabs">
       <button class="provider-tab active" data-provider="dashscope">阿里百炼</button>
-      <button class="provider-tab" data-provider="doubao">豆包爱学<span class="soon">暂未接入</span></button>
+      <button class="provider-tab" data-provider="doubao">豆包爱学</button>
       <button class="provider-tab" data-provider="xfyun">科大讯飞<span class="soon">暂未接入</span></button>
     </div>
   </div>
@@ -336,20 +336,26 @@
       <div class="error-bar" id="errorBar"></div>
 
       <div class="result-body">
-        <div id="resultMain">
-          <div class="placeholder" id="placeholder"><span class="big">📝</span>上传图片并点击「开始批改」，结果将在这里实时呈现</div>
-          <div class="raw-stream" id="streamText" style="display:none"></div>
-          <div id="cards" style="display:none"></div>
+        <!-- 阿里百炼结果区：包含流式结果、思考过程、转录文本，仅阿里百炼可见 -->
+        <div id="dashscopeArea">
+          <div id="resultMain">
+            <div class="placeholder" id="placeholder"><span class="big">📝</span>上传图片并点击「开始批改」，结果将在这里实时呈现</div>
+            <div class="raw-stream" id="streamText" style="display:none"></div>
+            <div id="cards" style="display:none"></div>
+          </div>
+
+          <details class="block" id="thinkingBlock" open>
+            <summary>思考过程</summary>
+            <div class="block-content thinking" id="thinkingText">（暂无）</div>
+          </details>
+          <details class="block" id="transcriptBlock" open>
+            <summary>用于批改的转录文本</summary>
+            <div class="block-content" id="transcriptText">（暂无）</div>
+          </details>
         </div>
 
-        <details class="block" id="thinkingBlock" open>
-          <summary>思考过程</summary>
-          <div class="block-content thinking" id="thinkingText">（暂无）</div>
-        </details>
-        <details class="block" open>
-          <summary>用于批改的转录文本</summary>
-          <div class="block-content" id="transcriptText">（暂无）</div>
-        </details>
+        <!-- 豆包结果区：无思考过程、无转录，仅展示提交任务与批改结果 -->
+        <div id="doubaoArea"></div>
       </div>
     </section>
   </main>
@@ -649,6 +655,14 @@
     var isDashscope = activeProvider === 'dashscope';
     $('enableThinkingRow').style.display = isDashscope ? 'flex' : 'none';
     syncShowThinkingRow();
+    /* 结果区按服务商整体切换：阿里百炼显示思考过程/转录/流式结果；豆包只显示批改结果区。 */
+    $('dashscopeArea').style.display = isDashscope ? 'block' : 'none';
+    $('doubaoArea').style.display = isDashscope ? 'none' : 'block';
+    /* 切回阿里百炼时复位结果区：有结果展示卡片，无结果展示占位，避免残留空流式区。 */
+    if (isDashscope && !running) {
+      if (contentRaw.trim()) { cards.style.display = 'block'; streamText.style.display = 'none'; placeholder.style.display = 'none'; }
+      else { placeholder.style.display = ''; streamText.style.display = 'none'; cards.style.display = 'none'; }
+    }
     if (running) { submitBtn.disabled = false; return; }
     if (p.ready) {
       note.style.display = 'none';
@@ -888,13 +902,10 @@
     if (wrap) wrap.remove();
   }
 
-  /* 清空结果主区里的百炼展示元素，给豆包结果腾出位置 */
+  /* 清空豆包结果区，给新一轮提交腾出位置（百炼区已由 dashscopeArea 整体隐藏，无需逐个清理） */
   function prepareDoubaoArea() {
-    placeholder.style.display = 'none';
-    streamText.style.display = 'none';
-    cards.style.display = 'none';
-    var old = $('doubaoWrap');
-    if (old) old.remove();
+    var area = $('doubaoArea');
+    if (area) area.innerHTML = '';
   }
 
   function submitDoubao(form) {
@@ -909,7 +920,7 @@
     var wrap = document.createElement('div');
     wrap.id = 'doubaoWrap';
     wrap.innerHTML = '<div class="placeholder"><span class="big">⏳</span>正在提交任务，请稍候…</div>';
-    resultMain.appendChild(wrap);
+    $('doubaoArea').appendChild(wrap);
 
     fetch(API + '/api/doubao/grade/submit', { method: 'POST', body: form, signal: controller.signal })
       .then(function (response) {
@@ -952,7 +963,7 @@
     var wrap = document.createElement('div');
     wrap.id = 'doubaoWrap';
     wrap.innerHTML = html;
-    resultMain.appendChild(wrap);
+    $('doubaoArea').appendChild(wrap);
     $('doubaoQueryBtn').addEventListener('click', queryDoubao);
   }
 
@@ -1025,6 +1036,26 @@
       return;
     }
 
+    /* 汇总：已完成题目里正确 / 错误 / 部分正确题数（依据 answer_results.correct 判定） */
+    var doneCnt = 0, rightCnt = 0, wrongCnt = 0, partialCnt = 0;
+    for (var s = 0; s < marks.length; s++) {
+      var ms = marks[s] || {};
+      if (ms.finish === false) continue;
+      doneCnt++;
+      var sars = ms.answer_results || [];
+      if (!sars.length) continue;
+      var sok = 0, sbad = 0;
+      sars.forEach(function (a) { if (a.correct) sok++; else sbad++; });
+      if (sok && !sbad) rightCnt++;
+      else if (sbad && !sok) wrongCnt++;
+      else if (sok && sbad) partialCnt++;
+    }
+    if (doneCnt) {
+      html += '<div class="total-banner" style="background:linear-gradient(120deg,#0ea5e9,#2563eb);margin-top:12px">' +
+        '共 ' + doneCnt + ' 题 · ✅ 正确 ' + rightCnt + ' · ❌ 错误 ' + wrongCnt +
+        (partialCnt ? ' · ⚠️ 部分正确 ' + partialCnt : '') + '</div>';
+    }
+
     for (var i = 0; i < marks.length; i++) {
       var m = marks[i] || {};
       if (m.finish === false) {
@@ -1047,6 +1078,15 @@
       html += '<div class="q-title">第 ' + (i + 1) + ' 题' +
         ' <span class="slot-tag" style="margin-left:6px">' + esc(qtype) + '</span>' +
         ' <span style="margin-left:6px;font-size:13px">' + badge + '</span></div>';
+
+      /* 逐个手写答案的判定：直接依据接口返回的 correct 字段，明确作答是否正确 */
+      if (ars.length) {
+        for (var k = 0; k < ars.length; k++) {
+          var a = ars[k] || {};
+          var okStr = a.correct ? '✅ 正确' : '❌ 错误';
+          html += '<div class="q-line ' + (a.correct ? 'ok' : 'bad') + '">作答 ' + (k + 1) + '：' + okStr + '</div>';
+        }
+      }
 
       var ocr = m.ocr_result || {};
       if (ocr.page_text) {
