@@ -826,6 +826,8 @@
         else if (line.indexOf('❌') >= 0 || line.indexOf('未作答') >= 0) cls += ' bad';
         else if (line.indexOf('⚠️') >= 0) cls += ' warn';
       }
+      if (line.indexOf('正确部分') >= 0) cls += ' ok';
+      else if (line.indexOf('错误部分') >= 0) cls += ' bad';
       if (line.indexOf('得分') >= 0) cls += ' score';
       var item = '<div class="' + cls + '">' + renderMathText(line, rawMode) + '</div>';
       if (current) current.push(item); else html += item;
