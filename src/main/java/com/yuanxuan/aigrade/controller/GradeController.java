@@ -2,7 +2,9 @@ package com.yuanxuan.aigrade.controller;
 
 import com.yuanxuan.aigrade.config.DashScopeProperties;
 import com.yuanxuan.aigrade.model.GradeInput;
+import com.yuanxuan.aigrade.model.GradeResponse;
 import com.yuanxuan.aigrade.service.GradeService;
+import com.yuanxuan.aigrade.service.GradeServiceSdk;
 import com.yuanxuan.aigrade.support.ImageUtils;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,10 +31,12 @@ public class GradeController {
     private static final long MAX_FILE_BYTES = 20L * 1024 * 1024;
 
     private final GradeService gradeService;
+    private final GradeServiceSdk gradeServiceSdk;
     private final DashScopeProperties props;
 
-    public GradeController(GradeService gradeService, DashScopeProperties props) {
+    public GradeController(GradeService gradeService, GradeServiceSdk gradeServiceSdk, DashScopeProperties props) {
         this.gradeService = gradeService;
+        this.gradeServiceSdk = gradeServiceSdk;
         this.props = props;
     }
 
@@ -114,6 +118,74 @@ public class GradeController {
         GradeInput input = new GradeInput(dataUrls, showThinking, enableThinking);
         CompletableFuture.runAsync(() -> gradeService.grade(input, emitter));
         return emitter;
+    }
+
+    /**
+     * 基于 dashscope 官方 SDK 的批改接口（与 {@link #gradeStream} 并行、互不影响）。
+     *
+     * 与 {@code /api/grade/stream} 的差异：
+     *   - 走 {@code ChatCompletions.call()} 非流式调用，两阶段结果一次性返回；
+     *   - 同步返回最终结果的 JSON（{@code ok / transcript / reasoning / content / usage}），不走 SSE；
+     *   - 去掉旧的兼容性单图入参 {@code image}，只保留多图 {@code images}；
+     *   - {@code enableThinking} 默认关闭（思考关闭时模型不产出 reasoning_content，{@code reasoning} 为 null）。
+     *
+     * 成功返回 {@code {"ok":true, "transcript":..., "reasoning":..., "content":..., "usage":...}}；
+     * 失败（校验或模型异常）返回 {@code {"ok":false, "message":...}}。
+     *
+     * @param showThinking   是否返回思考过程（仅在 enableThinking 开启时有意义）
+     * @param enableThinking 阶段二是否开启模型思考，默认关闭
+     * @param images         按上传顺序排列的多张图片（题干与作答可分在不同图片里）
+     */
+    @PostMapping(value = "/grade/sdk", produces = MediaType.APPLICATION_JSON_VALUE)
+    public GradeResponse gradeSdk(
+            @RequestParam(value = "showThinking", defaultValue = "true") boolean showThinking,
+            @RequestParam(value = "enableThinking", defaultValue = "false") boolean enableThinking,
+            @RequestParam(value = "images", required = false) List<MultipartFile> images) {
+
+        if (props.getApiKey() == null || props.getApiKey().isBlank()) {
+            return GradeResponse.error("尚未配置 API Key：请设置环境变量 DASHSCOPE_API_KEY 后重启服务（详见 README）");
+        }
+
+        List<MultipartFile> files = new ArrayList<>();
+        if (images != null) {
+            for (MultipartFile f : images) {
+                if (f != null && !f.isEmpty()) {
+                    files.add(f);
+                }
+            }
+        }
+
+        if (files.isEmpty()) {
+            return GradeResponse.error("请至少上传一张图片");
+        }
+        if (files.size() > MAX_IMAGES) {
+            return GradeResponse.error("一次最多上传 " + MAX_IMAGES + " 张图片，当前为 " + files.size() + " 张");
+        }
+        for (int i = 0; i < files.size(); i++) {
+            MultipartFile f = files.get(i);
+            if (!ImageUtils.isImage(f)) {
+                return GradeResponse.error("第 " + (i + 1) + " 个文件不是图片（jpg / jpeg / png / webp / gif / bmp）");
+            }
+            if (f.getSize() > MAX_FILE_BYTES) {
+                return GradeResponse.error("第 " + (i + 1) + " 张图片超过 20MB，请压缩后再上传");
+            }
+        }
+
+        try {
+            List<String> dataUrls = new ArrayList<>();
+            for (MultipartFile f : files) {
+                dataUrls.add(ImageUtils.toDataUrl(f));
+            }
+
+            GradeInput input = new GradeInput(dataUrls, showThinking, enableThinking);
+            GradeServiceSdk.GradeResult r = gradeServiceSdk.grade(input);
+
+            GradeResponse.Usage usage = new GradeResponse.Usage(
+                    r.getUsage().getPromptTokens(), r.getUsage().getCompletionTokens(), r.getUsage().getTotalTokens());
+            return GradeResponse.ok(r.getTranscript(), r.getReasoning(), r.getContent(), usage);
+        } catch (Exception e) {
+            return GradeResponse.error(GradeServiceSdk.friendlyMessage(e));
+        }
     }
 
     private void failFast(SseEmitter emitter, String message) {

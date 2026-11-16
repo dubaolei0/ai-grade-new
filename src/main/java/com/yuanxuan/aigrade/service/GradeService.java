@@ -42,7 +42,7 @@ public class GradeService {
 
     public void grade(GradeInput input, SseEmitter emitter) {
         try {
-            int imageCount = input.imageDataUrls().size();
+            int imageCount = input.getImageDataUrls().size();
             emit(emitter, "stage", Map.of("stage", "transcribe",
                     "label", "阶段一 · 作业转录（" + imageCount + " 张图片）"));
 
@@ -54,7 +54,7 @@ public class GradeService {
 
             // OpenAI 兼容多图写法：图片按上传顺序连续排布，最后一个 text 给出转录要求
             List<Map<String, Object>> content = new ArrayList<>();
-            for (String dataUrl : input.imageDataUrls()) {
+            for (String dataUrl : input.getImageDataUrls()) {
                 Map<String, Object> imagePart = new LinkedHashMap<>();
                 imagePart.put("type", "image_url");
                 imagePart.put("image_url", Map.of("url", dataUrl));
@@ -79,8 +79,8 @@ public class GradeService {
             emit(emitter, "stage", Map.of("stage", "grade", "label", "阶段二 · 解题与批改"));
             String gradePrompt = Prompts.GRADE.replace("{transcript}", transcript);
 
-            ChatResult stage2 = client.chatStream(gradePrompt, input.enableThinking(), (reasoning, text) -> {
-                if (reasoning != null && !reasoning.isEmpty() && input.showThinking()) {
+            ChatResult stage2 = client.chatStream(gradePrompt, input.isEnableThinking(), (reasoning, text) -> {
+                if (reasoning != null && !reasoning.isEmpty() && input.isShowThinking()) {
                     sendDelta(emitter, "reasoning", reasoning);
                 }
                 if (text != null && !text.isEmpty()) {
